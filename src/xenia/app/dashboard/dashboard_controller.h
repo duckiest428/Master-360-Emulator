@@ -106,6 +106,9 @@ class DashboardController {
   DashboardStyle style() const;
   void SetStyle(DashboardStyle style);
   void SetSoundsEnabled(bool enabled);
+  // Xbox Guide skin: Metro (2011+) or Blades (2008 NXE).
+  bool guide_metro() const;
+  void ToggleGuideStyle();
 
   // Gamercard of the player signed in to `user_index`.
   ProfileCard GetProfileCard(uint8_t user_index = 0);

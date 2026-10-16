@@ -1,0 +1,437 @@
+diff --git a/XboxMetroLauncher/MainWindow.xaml b/XboxMetroLauncher/MainWindow.xaml
+index 1e8a46b..b1116f0 100644
+--- a/XboxMetroLauncher/MainWindow.xaml
++++ b/XboxMetroLauncher/MainWindow.xaml
+@@ -2545,6 +2545,7 @@
+               <StackPanel Margin="0,0,0,18">
+                 <TextBlock Text="Add items to" Foreground="#FF333333" FontSize="15" Margin="30,12,30,0" />
+                 <ComboBox Height="38" Margin="30,4,30,7" Tag="Add Items To|Choose where newly added games or apps should appear." ItemsSource="{Binding AddDestinationOptions}" SelectedItem="{Binding DefaultAddDestination, Mode=TwoWay}" GotKeyboardFocus="SettingsOption_OnFocusOrMouseEnter" MouseEnter="SettingsOption_OnFocusOrMouseEnter" />
++                <Button Content="Scan Xbox 360 Games" Style="{StaticResource SystemSettingsOptionButtonStyle}" Tag="Scan Xbox 360 Games|Search Xenia's game folder for Xbox 360 games and add them to the dashboard." Command="{Binding ScanXbox360GamesCommand}" GotKeyboardFocus="SettingsOption_OnFocusOrMouseEnter" MouseEnter="SettingsOption_OnFocusOrMouseEnter" />
+                 <Button Content="Scan Steam Games" Style="{StaticResource SystemSettingsOptionButtonStyle}" Tag="Scan Steam Games|Find installed Steam games and add them to the dashboard." Command="{Binding ScanSteamGamesCommand}" GotKeyboardFocus="SettingsOption_OnFocusOrMouseEnter" MouseEnter="SettingsOption_OnFocusOrMouseEnter" />
+                 <Button Content="Steam Setup" Style="{StaticResource SystemSettingsOptionButtonStyle}" Tag="Steam Setup|Configure Steam Web API and profile details for richer game metadata." Command="{Binding OpenSteamSetupCommand}" GotKeyboardFocus="SettingsOption_OnFocusOrMouseEnter" MouseEnter="SettingsOption_OnFocusOrMouseEnter" />
+                 <Button Content="Add Executable" Style="{StaticResource SystemSettingsOptionButtonStyle}" Tag="Add Executable|Add a local game or app executable manually." Command="{Binding AddGameCommand}" GotKeyboardFocus="SettingsOption_OnFocusOrMouseEnter" MouseEnter="SettingsOption_OnFocusOrMouseEnter" />
+diff --git a/XboxMetroLauncher/XboxMetroLauncher/MainWindow.cs b/XboxMetroLauncher/XboxMetroLauncher/MainWindow.cs
+index 9fe880a..6be2ed3 100644
+--- a/XboxMetroLauncher/XboxMetroLauncher/MainWindow.cs
++++ b/XboxMetroLauncher/XboxMetroLauncher/MainWindow.cs
+@@ -641,6 +641,11 @@ public partial class MainWindow : Window
+ 		}
+ 		if (action == DashboardInputAction.Guide)
+ 		{
++			// Xenia shows its own in-game Guide while an Xbox 360 game runs.
++			if (XeniaIntegration.IsXeniaGameRunning)
++			{
++				return;
++			}
+ 			if (TryHandleActiveToastAction())
+ 			{
+ 				return;
+diff --git a/XboxMetroLauncher/XboxMetroLauncher.Services/GameLaunchService.cs b/XboxMetroLauncher/XboxMetroLauncher.Services/GameLaunchService.cs
+index 3fc4db7..1f498e0 100644
+--- a/XboxMetroLauncher/XboxMetroLauncher.Services/GameLaunchService.cs
++++ b/XboxMetroLauncher/XboxMetroLauncher.Services/GameLaunchService.cs
+@@ -30,6 +30,15 @@ public sealed class GameLaunchService : IGameLaunchService
+ 
+ 	public async Task<GameLaunchResult> LaunchAsync(GameMetadata game, CancellationToken cancellationToken = default(CancellationToken))
+ 	{
++		if (XeniaIntegration.IsXeniaGame(game))
++		{
++			Process xeniaProcess = XeniaIntegration.Launch(game);
++			Log($"xenia launch request | title={game.Title} | pid={xeniaProcess?.Id} | path={game.ExecutablePath}");
++			return new GameLaunchResult
++			{
++				TrackedProcess = xeniaProcess
++			};
++		}
+ 		if (string.Equals(game.LaunchType, "Url", StringComparison.OrdinalIgnoreCase))
+ 		{
+ 			string url = NormalizeUrl(game.LaunchCommand);
+diff --git a/XboxMetroLauncher/XboxMetroLauncher.Services/XeniaIntegration.cs b/XboxMetroLauncher/XboxMetroLauncher.Services/XeniaIntegration.cs
+new file mode 100644
+index 0000000..f38cd93
+--- /dev/null
++++ b/XboxMetroLauncher/XboxMetroLauncher.Services/XeniaIntegration.cs
+@@ -0,0 +1,270 @@
++using System;
++using System.Collections.Generic;
++using System.Diagnostics;
++using System.IO;
++using System.Linq;
++using System.Text.Json;
++using System.Threading.Tasks;
++using XboxMetroLauncher.Models;
++using XboxMetroLauncher.Utilities;
++
++namespace XboxMetroLauncher.Services;
++
++// Bridges DashX360 and the Xenia Xbox 360 emulator. Xenia starts DashX360 as
++// its home screen and passes, through the environment:
++//   XENIA_EXE          - the emulator executable
++//   XENIA_LIBRARY_JSON - the Xbox 360 game library Xenia scanned
++// Xbox 360 games are merged into the DashX360 library with LaunchType "Xenia"
++// and launched back through Xenia with XENIA_DASHBOARD_SHELL=1, which tells
++// Xenia to close (returning here) when the player picks Xbox Home.
++public static class XeniaIntegration
++{
++	public const string LaunchType = "Xenia";
++
++	private const string IdPrefix = "xenia-";
++
++	private static volatile bool _isXeniaGameRunning;
++
++	// While a Xenia game runs, Xenia owns the Guide button.
++	public static bool IsXeniaGameRunning => _isXeniaGameRunning;
++
++	public static bool IsXeniaGame(GameMetadata? game)
++	{
++		return game != null && string.Equals(game.LaunchType, LaunchType, StringComparison.OrdinalIgnoreCase);
++	}
++
++	public static string? XeniaExecutablePath
++	{
++		get
++		{
++			string env = Environment.GetEnvironmentVariable("XENIA_EXE") ?? string.Empty;
++			if (!string.IsNullOrWhiteSpace(env) && File.Exists(env))
++			{
++				return env;
++			}
++			// Default install: DashX360 lives in a "DashX360" folder next to Xenia.
++			string? parent = Directory.GetParent(AppPaths.AppFolder)?.FullName;
++			if (parent != null)
++			{
++				string candidate = Path.Combine(parent, "xenia_canary.exe");
++				if (File.Exists(candidate))
++				{
++					return candidate;
++				}
++			}
++			return null;
++		}
++	}
++
++	public static string? LibraryJsonPath
++	{
++		get
++		{
++			string env = Environment.GetEnvironmentVariable("XENIA_LIBRARY_JSON") ?? string.Empty;
++			if (!string.IsNullOrWhiteSpace(env))
++			{
++				return env;
++			}
++			string? xenia = XeniaExecutablePath;
++			if (xenia == null)
++			{
++				return null;
++			}
++			return Path.Combine(Path.GetDirectoryName(xenia) ?? string.Empty, "cache_host", "dashboard", "library.json");
++		}
++	}
++
++	private sealed class XeniaGame
++	{
++		public string Title { get; set; } = string.Empty;
++		public string Path { get; set; } = string.Empty;
++		public string TitleId { get; set; } = string.Empty;
++		public string Source { get; set; } = string.Empty;
++		public int Achievements { get; set; }
++		public int Gamerscore { get; set; }
++		public string IconPath { get; set; } = string.Empty;
++		public string CoverPath { get; set; } = string.Empty;
++	}
++
++	private sealed class XeniaLibraryFile
++	{
++		public List<XeniaGame> Games { get; set; } = new List<XeniaGame>();
++	}
++
++	// Merges Xenia's exported library into the DashX360 library. Returns true
++	// when anything changed. Entries for games that are no longer in the
++	// Xenia library are removed.
++	public static bool MergeInto(GameLibrary library)
++	{
++		string? path = LibraryJsonPath;
++		if (path == null || !File.Exists(path))
++		{
++			return false;
++		}
++		XeniaLibraryFile? file;
++		try
++		{
++			file = JsonSerializer.Deserialize<XeniaLibraryFile>(File.ReadAllText(path), new JsonSerializerOptions
++			{
++				PropertyNameCaseInsensitive = true,
++				AllowTrailingCommas = true
++			});
++		}
++		catch (Exception ex)
++		{
++			App.LogException(ex, "XeniaIntegration.MergeInto");
++			return false;
++		}
++		if (file == null)
++		{
++			return false;
++		}
++
++		bool changed = false;
++		HashSet<string> present = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
++		foreach (XeniaGame xg in file.Games)
++		{
++			if (string.IsNullOrWhiteSpace(xg.Path))
++			{
++				continue;
++			}
++			present.Add(xg.Path);
++			GameMetadata? game = library.Games.FirstOrDefault((GameMetadata g) => IsXeniaGame(g) && string.Equals(g.ExecutablePath, xg.Path, StringComparison.OrdinalIgnoreCase));
++			if (game == null)
++			{
++				game = new GameMetadata
++				{
++					Id = IdPrefix + xg.TitleId + "-" + StableHash(xg.Path),
++					LaunchType = LaunchType,
++					ExecutablePath = xg.Path,
++					Platform = "Xbox 360"
++				};
++				library.Games.Add(game);
++				changed = true;
++			}
++			string cover = !string.IsNullOrWhiteSpace(xg.CoverPath) ? xg.CoverPath : xg.IconPath;
++			string description = xg.Achievements > 0 ? $"Xbox 360 · {xg.Source} · {xg.Achievements} achievements, {xg.Gamerscore} gamerscore" : $"Xbox 360 · {xg.Source}";
++			// Keep user edits to the title/cover; only fill what's missing or
++			// still Xenia-provided.
++			if (string.IsNullOrWhiteSpace(game.Title))
++			{
++				game.Title = xg.Title;
++				changed = true;
++			}
++			if (string.IsNullOrWhiteSpace(game.CoverArtPath) || IsXeniaCachePath(game.CoverArtPath))
++			{
++				if (!string.Equals(game.CoverArtPath, cover, StringComparison.OrdinalIgnoreCase))
++				{
++					game.CoverArtPath = cover;
++					changed = true;
++				}
++			}
++			if (!string.Equals(game.StoreDescription, description, StringComparison.Ordinal))
++			{
++				game.StoreDescription = description;
++				changed = true;
++			}
++			if (string.IsNullOrWhiteSpace(game.Genre))
++			{
++				game.Genre = "Xbox 360";
++				changed = true;
++			}
++		}
++		int removed = library.Games.RemoveAll((GameMetadata g) => IsXeniaGame(g) && !present.Contains(g.ExecutablePath));
++		return changed || removed > 0;
++	}
++
++	public static Process? Launch(GameMetadata game)
++	{
++		string? xenia = XeniaExecutablePath;
++		if (xenia == null)
++		{
++			throw new InvalidOperationException("Xenia (xenia_canary.exe) was not found next to DashX360.");
++		}
++		ProcessStartInfo info = new ProcessStartInfo
++		{
++			FileName = xenia,
++			Arguments = "\"" + game.ExecutablePath + "\"",
++			WorkingDirectory = Path.GetDirectoryName(xenia) ?? string.Empty,
++			UseShellExecute = false
++		};
++		info.Environment["XENIA_DASHBOARD_SHELL"] = "1";
++		Process? process = Process.Start(info);
++		if (process != null)
++		{
++			_isXeniaGameRunning = true;
++			process.EnableRaisingEvents = true;
++			process.Exited += delegate
++			{
++				_isXeniaGameRunning = false;
++				RestoreDashboardWindow();
++			};
++		}
++		return process;
++	}
++
++	// Brings DashX360 back in front when the player leaves the game, like the
++	// console returning to the dashboard.
++	private static void RestoreDashboardWindow()
++	{
++		System.Windows.Application? app = System.Windows.Application.Current;
++		app?.Dispatcher.BeginInvoke((Action)delegate
++		{
++			System.Windows.Window? window = app.MainWindow;
++			if (window == null)
++			{
++				return;
++			}
++			if (window.WindowState == System.Windows.WindowState.Minimized)
++			{
++				window.WindowState = System.Windows.WindowState.Maximized;
++			}
++			window.Show();
++			window.Activate();
++			window.Topmost = true;
++			window.Topmost = false;
++			window.Focus();
++		});
++	}
++
++	// Asks Xenia to rescan its game folder and re-export the library, then
++	// waits for it to finish.
++	public static async Task<bool> RescanAsync()
++	{
++		string? xenia = XeniaExecutablePath;
++		if (xenia == null)
++		{
++			return false;
++		}
++		ProcessStartInfo info = new ProcessStartInfo
++		{
++			FileName = xenia,
++			WorkingDirectory = Path.GetDirectoryName(xenia) ?? string.Empty,
++			UseShellExecute = false,
++			CreateNoWindow = true
++		};
++		info.Environment["XENIA_DASHBOARD_EXPORT_ONLY"] = "1";
++		using Process? process = Process.Start(info);
++		if (process == null)
++		{
++			return false;
++		}
++		await process.WaitForExitAsync().ConfigureAwait(continueOnCapturedContext: false);
++		return true;
++	}
++
++	private static bool IsXeniaCachePath(string path)
++	{
++		return path.Contains(Path.Combine("cache_host", "dashboard"), StringComparison.OrdinalIgnoreCase);
++	}
++
++	private static string StableHash(string text)
++	{
++		uint hash = 2166136261u;
++		foreach (char c in text.ToLowerInvariant())
++		{
++			hash = (hash ^ c) * 16777619u;
++		}
++		return hash.ToString("x8");
++	}
++}
+diff --git a/XboxMetroLauncher/XboxMetroLauncher.ViewModels/DashboardViewModel.cs b/XboxMetroLauncher/XboxMetroLauncher.ViewModels/DashboardViewModel.cs
+index e8a9bef..4764f0d 100644
+--- a/XboxMetroLauncher/XboxMetroLauncher.ViewModels/DashboardViewModel.cs
++++ b/XboxMetroLauncher/XboxMetroLauncher.ViewModels/DashboardViewModel.cs
+@@ -2632,6 +2632,8 @@ public sealed class DashboardViewModel : ObservableObject
+ 
+ 	public ICommand ScanSteamGamesCommand { get; }
+ 
++	public ICommand ScanXbox360GamesCommand { get; }
++
+ 	public ICommand OpenSteamSetupCommand { get; }
+ 
+ 	public ICommand CloseSteamSetupCommand { get; }
+@@ -2977,6 +2979,7 @@ public sealed class DashboardViewModel : ObservableObject
+ 		ExportDataCommand = new AsyncRelayCommand(ExportDataAsync);
+ 		ImportDataCommand = new AsyncRelayCommand(ImportDataAsync);
+ 		ScanSteamGamesCommand = new AsyncRelayCommand(ScanSteamGamesAsync);
++		ScanXbox360GamesCommand = new AsyncRelayCommand(ScanXbox360GamesAsync);
+ 		OpenSteamSetupCommand = new AsyncRelayCommand(OpenSteamSetupAsync);
+ 		CloseSteamSetupCommand = new RelayCommand((Action)delegate
+ 		{
+@@ -3233,6 +3236,10 @@ public sealed class DashboardViewModel : ObservableObject
+ 		Settings.DiscordGrantedScopes = string.Empty;
+ 		Settings.DiscordTokenType = string.Empty;
+ 		_library = await _libraryService.LoadAsync();
++		if (XeniaIntegration.MergeInto(_library))
++		{
++			await _libraryService.SaveAsync(_library);
++		}
+ 		foreach (GameMetadata game in _library.Games)
+ 		{
+ 			GameMetadata gameMetadata = game;
+@@ -5732,7 +5739,9 @@ public sealed class DashboardViewModel : ObservableObject
+ 		{
+ 			SelectedGame = card;
+ 			_runningGameService.BeginLaunch(card.Game, DateTimeOffset.UtcNow);
+-			if (Settings.MinimizeOnGameLaunch)
++			// Xenia runs full screen on top; minimizing the dashboard while Xenia
++			// creates its D3D12 device was observed to cause device removal.
++			if (Settings.MinimizeOnGameLaunch && !XeniaIntegration.IsXeniaGame(card.Game))
+ 			{
+ 				Window window = System.Windows.Application.Current?.MainWindow;
+ 				if (window != null)
+@@ -8019,6 +8028,35 @@ public sealed class DashboardViewModel : ObservableObject
+ 		}
+ 	}
+ 
++	private async Task ScanXbox360GamesAsync()
++	{
++		try
++		{
++			StatusMessage = "Searching for Xbox 360 games...";
++			if (!await XeniaIntegration.RescanAsync())
++			{
++				System.Windows.MessageBox.Show("Xenia (xenia_canary.exe) was not found next to DashX360.", "Scan Xbox 360 Games", MessageBoxButton.OK, MessageBoxImage.Exclamation);
++				return;
++			}
++			int before = _library.Games.Count(XeniaIntegration.IsXeniaGame);
++			if (XeniaIntegration.MergeInto(_library))
++			{
++				SyncGamesCollectionFromLibrary();
++				RefreshDerivedLists();
++				SortGamesByTitle(SelectedGame?.Game.Id);
++				await PersistLibraryAsync();
++			}
++			int after = _library.Games.Count(XeniaIntegration.IsXeniaGame);
++			StatusMessage = $"{after} Xbox 360 games";
++			System.Windows.MessageBox.Show($"Xbox 360 scan complete.{Environment.NewLine}{Environment.NewLine}Games: {after} ({after - before:+0;-0;0})", "Scan Xbox 360 Games", MessageBoxButton.OK, MessageBoxImage.Asterisk);
++		}
++		catch (Exception ex)
++		{
++			App.LogException(ex, "DashboardViewModel.ScanXbox360GamesAsync");
++			StatusMessage = "Xbox 360 scan failed";
++		}
++	}
++
+ 	private async Task ScanSteamGamesAsync()
+ 	{
+ 		_ = 1;
+diff --git a/XboxMetroLauncher/XboxMetroLauncher.ViewModels/GameCardViewModel.cs b/XboxMetroLauncher/XboxMetroLauncher.ViewModels/GameCardViewModel.cs
+index b46dd60..863b5e9 100644
+--- a/XboxMetroLauncher/XboxMetroLauncher.ViewModels/GameCardViewModel.cs
++++ b/XboxMetroLauncher/XboxMetroLauncher.ViewModels/GameCardViewModel.cs
+@@ -16,6 +16,10 @@ public sealed class GameCardViewModel : ObservableObject
+ 	{
+ 		get
+ 		{
++			if (IsXbox360Game)
++			{
++				return "Xbox 360";
++			}
+ 			if (!IsSteamGame)
+ 			{
+ 				return "PC - Manual";
+@@ -50,12 +54,18 @@ public sealed class GameCardViewModel : ObservableObject
+ 
+ 	public bool IsSteamGame => string.Equals(Game.LaunchType, "Steam", StringComparison.OrdinalIgnoreCase);
+ 
++	public bool IsXbox360Game => Services.XeniaIntegration.IsXeniaGame(Game);
++
+ 	public bool IsManualGame => !IsSteamGame;
+ 
+ 	public string DetailsSourceText
+ 	{
+ 		get
+ 		{
++			if (IsXbox360Game)
++			{
++				return "Xbox 360 (Xenia)";
++			}
+ 			if (!IsSteamGame)
+ 			{
+ 				return "Manual";

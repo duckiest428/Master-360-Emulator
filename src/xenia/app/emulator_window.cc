@@ -23,6 +23,7 @@
 #include "xenia/app/console_settings_dialog.h"
 #include "xenia/app/content_list_dialog.h"
 #include "xenia/app/dashboard/dashboard_controller.h"
+#include "xenia/app/dashboard/dashboard_shell.h"
 #include "xenia/base/assert.h"
 #include "xenia/base/clock.h"
 #include "xenia/base/cvar.h"
@@ -278,6 +279,11 @@ void EmulatorWindow::OnEmulatorInitialized() {
   // menu isn't disabled), enter fullscreen if requested.
   if (cvars::fullscreen) {
     SetFullscreen(true);
+  } else if (dashboard::IsLaunchedFromShell()) {
+    // Started from the dashboard front end: run the title full screen like a
+    // console, without changing the saved fullscreen preference.
+    window_->SetFullscreen(true);
+    window_->SetCursorVisibility(ui::Window::CursorVisibility::kAutoHidden);
   }
 
   if (IsUseNexusForGameBarEnabled()) {

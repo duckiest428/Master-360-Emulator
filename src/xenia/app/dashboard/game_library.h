@@ -50,6 +50,7 @@ struct GameEntry {
   // Optional box art supplied by the user (covers/<TITLEID>.png|jpg or a
   // cover image next to the game). Real game files contain no box art.
   std::vector<uint8_t> cover_image;
+  std::filesystem::path cover_path;
 
   std::string DisplayName() const;
   std::string TitleIdString() const;
@@ -67,6 +68,12 @@ class GameLibrary {
 
   void StartScan(const std::filesystem::path& root);
   void CancelScan();
+  // Blocks until the current scan (if any) completes.
+  void WaitForScan();
+
+  // Writes the current game list as JSON for external front ends (DashX360).
+  // Icons are referenced from the library's icon cache.
+  bool ExportJson(const std::filesystem::path& path) const;
 
   bool IsScanning() const { return scanning_.load(); }
   // Incremented every time the published game list changes.

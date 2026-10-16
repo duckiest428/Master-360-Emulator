@@ -15,6 +15,7 @@
 #include <thread>
 
 #include "xenia/app/discord/discord_presence.h"
+#include "xenia/app/dashboard/dashboard_shell.h"
 #include "xenia/app/emulator_window.h"
 #include "xenia/base/assert.h"
 #include "xenia/base/cvar.h"
@@ -535,6 +536,14 @@ bool EmulatorApp::OnInitialize() {
   }
   cache_root = std::filesystem::absolute(cache_root);
   XELOGI("Host cache root: {}", cache_root);
+
+  // With a dashboard front end installed (DashX360), Xenia started without a
+  // title only exports the game library, starts the front end and exits.
+  if (dashboard::HandOffToShellIfNeeded(cache_root)) {
+    config::SaveConfig();
+    xe::FlushLog();
+    std::quick_exit(EXIT_SUCCESS);
+  }
 
   if (cvars::discord) {
     discord::DiscordPresence::Initialize();

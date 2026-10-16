@@ -220,7 +220,8 @@ void Painter::TextClipped(ImVec2 pos, std::string_view text, float size,
 }
 
 void Painter::TextVertical(ImVec2 pos, std::string_view text, float size,
-                           ImU32 color, ui::DashboardFont weight) {
+                           ImU32 color, ui::DashboardFont weight,
+                           bool downward) {
   if (text.empty()) {
     return;
   }
@@ -233,8 +234,13 @@ void Painter::TextVertical(ImVec2 pos, std::string_view text, float size,
     ImDrawVert& v = dl_->VtxBuffer[i];
     const float dx = v.pos.x - pivot.x;
     const float dy = v.pos.y - pivot.y;
-    // Rotate -90 degrees: text advances upwards, glyph tops face left.
-    v.pos = ImVec2(pivot.x + dy, pivot.y - dx);
+    if (downward) {
+      // Rotate +90 degrees: text advances downwards, glyph tops face right.
+      v.pos = ImVec2(pivot.x - dy, pivot.y + dx);
+    } else {
+      // Rotate -90 degrees: text advances upwards, glyph tops face left.
+      v.pos = ImVec2(pivot.x + dy, pivot.y - dx);
+    }
   }
 }
 

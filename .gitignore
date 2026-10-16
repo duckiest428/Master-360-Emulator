@@ -116,3 +116,7 @@ node_modules/.bin/
 /cache0
 /devkit
 recent.toml
+
+# DashX360 front end (by ZivvoZ) - not redistributed; see tools/dashx360
+/dashx360-main/
+/DashX360 V*/

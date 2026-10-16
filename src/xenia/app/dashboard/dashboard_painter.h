@@ -73,11 +73,14 @@ class Painter {
                    ImU32 color, float max_width,
                    ui::DashboardFont weight = ui::DashboardFont::kRegular,
                    TextAlign align = TextAlign::kLeft);
-  // Text rotated 90 degrees counter-clockwise, reading bottom to top, with
-  // its baseline-start at `pos` (used for blade tabs).
+  // Text rotated 90 degrees, used for blade tabs. Reads bottom to top by
+  // default (glyph tops face left), or top to bottom when `downward` (glyph
+  // tops face right). `pos` is where the first glyph's top-left corner would
+  // be before rotation.
   void TextVertical(ImVec2 pos, std::string_view text, float size,
                     ImU32 color,
-                    ui::DashboardFont weight = ui::DashboardFont::kRegular);
+                    ui::DashboardFont weight = ui::DashboardFont::kRegular,
+                    bool downward = false);
   ImVec2 MeasureText(std::string_view text, float size,
                      ui::DashboardFont weight = ui::DashboardFont::kRegular,
                      float wrap_width = 0.f);

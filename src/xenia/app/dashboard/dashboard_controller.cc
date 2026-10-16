@@ -12,6 +12,7 @@
 #include <cstdlib>
 
 #include "third_party/fmt/include/fmt/format.h"
+#include "xenia/app/dashboard/dashboard_shell.h"
 #include "xenia/app/dashboard/dashboard_ui.h"
 #include "xenia/app/dashboard/guide_overlay.h"
 #include "xenia/app/emulator_window.h"
@@ -64,6 +65,12 @@ DEFINE_bool(dashboard_sounds, true,
             "back.wav, blade_slide.wav, channel_change.wav, guide_open.wav, "
             "guide_close.wav, achievement.wav, notification.wav, error.wav).",
             "Dashboard");
+DEFINE_string(guide_style, "metro",
+              "Xbox Guide style.\n"
+              " metro: 2011+ guide (Games & Apps, profile, Media, Settings).\n"
+              " blades: 2008 NXE guide (Marketplace, Games, profile, Media, "
+              "Settings).",
+              "Dashboard");
 DEFINE_bool(guide_suspends_title, true,
             "Suspend the title's guest threads while the Xbox Guide is open.",
             "Dashboard");
@@ -75,6 +82,11 @@ namespace app {
 namespace dashboard {
 
 using kernel::xam::UserSettingId;
+
+void SetLibraryPath(const std::filesystem::path& path) {
+  OVERRIDE_path(dashboard_library_path, path);
+  config::SaveConfig();
+}
 
 // ---------------------------------------------------------------------------
 // TextureCache
@@ -163,7 +175,8 @@ void DashboardController::Initialize() {
     };
   }
 
-  if (!cvars::dashboard_library_path.empty()) {
+  // When the shell started us for a title, it owns the library and home.
+  if (!cvars::dashboard_library_path.empty() && !IsLaunchedFromShell()) {
     library_->StartScan(cvars::dashboard_library_path);
   }
 
@@ -193,6 +206,15 @@ DashboardStyle DashboardController::style() const {
 void DashboardController::SetStyle(DashboardStyle style) {
   OVERRIDE_string(dashboard_style,
                   style == DashboardStyle::kBlades ? "blades" : "nxe");
+  config::SaveConfig();
+}
+
+bool DashboardController::guide_metro() const {
+  return xe::utf8::lower_ascii(cvars::guide_style) != "blades";
+}
+
+void DashboardController::ToggleGuideStyle() {
+  OVERRIDE_string(guide_style, guide_metro() ? "blades" : "metro");
   config::SaveConfig();
 }
 
@@ -332,7 +354,8 @@ ui::ImmediateTexture* DashboardController::GetGameCover(const GameEntry& game) {
 // ---------------------------------------------------------------------------
 
 void DashboardController::ShowDashboard() {
-  if (!cvars::dashboard || emulator()->is_title_open()) {
+  if (!cvars::dashboard || emulator()->is_title_open() ||
+      IsLaunchedFromShell()) {
     return;
   }
   // Recreate: RunTitle's ClearDialogs may have detached the old instance.
@@ -375,6 +398,7 @@ void DashboardController::OpenGuide() {
   } else {
     if (in_title && xam->IsUIActive() && !release_input_on_neutral_) {
       // A title-requested system dialog (keyboard, sign-in...) is showing.
+      XELOGI("Dashboard: guide not opened, a system dialog is active");
       return;
     }
     guide_ = std::make_unique<GuideOverlay>(imgui_drawer(), this, in_title);
@@ -509,8 +533,7 @@ void DashboardController::ChooseLibraryFolder() {
     if (selected.empty()) {
       return;
     }
-    OVERRIDE_path(dashboard_library_path, selected.front());
-    config::SaveConfig();
+    SetLibraryPath(selected.front());
     library_->StartScan(selected.front());
     ShowToast("Searching for games...");
   });
@@ -534,8 +557,14 @@ void DashboardController::OnTitleExitRequested() {
 }
 
 void DashboardController::RestartToDashboard() {
-  XELOGI("Dashboard: restarting Xenia to return to the dashboard");
   config::SaveConfig();
+  if (IsLaunchedFromShell()) {
+    // The shell is waiting for this process; closing it returns there.
+    XELOGI("Dashboard: closing title, returning to the dashboard shell");
+    xe::FlushLog();
+    std::quick_exit(0);
+  }
+  XELOGI("Dashboard: restarting Xenia to return to the dashboard");
 
   const std::filesystem::path exe = xe::filesystem::GetExecutablePath();
   bool started = false;

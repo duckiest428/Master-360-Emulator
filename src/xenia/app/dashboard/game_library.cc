@@ -147,6 +147,83 @@ void GameLibrary::CancelScan() {
   scanning_ = false;
 }
 
+void GameLibrary::WaitForScan() {
+  if (thread_.joinable()) {
+    thread_.join();
+  }
+  scanning_ = false;
+}
+
+namespace {
+std::string JsonEscape(std::string_view text) {
+  std::string out;
+  out.reserve(text.size() + 2);
+  for (const char c : text) {
+    switch (c) {
+      case '"':
+        out += "\\\"";
+        break;
+      case '\\':
+        out += "\\\\";
+        break;
+      case '\n':
+        out += "\\n";
+        break;
+      case '\r':
+        out += "\\r";
+        break;
+      case '\t':
+        out += "\\t";
+        break;
+      default:
+        if (uint8_t(c) < 0x20) {
+          out += fmt::format("\\u{:04x}", uint8_t(c));
+        } else {
+          out += c;
+        }
+    }
+  }
+  return out;
+}
+}  // namespace
+
+bool GameLibrary::ExportJson(const std::filesystem::path& path) const {
+  std::error_code ec;
+  std::filesystem::create_directories(path.parent_path(), ec);
+  std::ofstream file(path, std::ios::trunc);
+  if (!file) {
+    return false;
+  }
+  const GameList games = GetGames();
+  file << "{\n  \"version\": 1,\n  \"games\": [";
+  bool first = true;
+  for (const auto& game : games) {
+    const std::string key = xe::path_to_utf8(game->launch_path);
+    std::string icon_path;
+    if (!game->icon_image.empty()) {
+      icon_path = xe::path_to_utf8(
+          cache_dir_ / "icons" /
+          fmt::format("{:016X}.png", std::hash<std::string>()(key)));
+    }
+    file << (first ? "\n" : ",\n");
+    first = false;
+    file << "    {"
+         << "\"title\": \"" << JsonEscape(game->DisplayName()) << "\", "
+         << "\"path\": \"" << JsonEscape(key) << "\", "
+         << "\"titleId\": \"" << game->TitleIdString() << "\", "
+         << "\"mediaId\": \"" << fmt::format("{:08X}", game->media_id)
+         << "\", "
+         << "\"source\": \"" << GameSourceName(game->source) << "\", "
+         << "\"achievements\": " << game->achievement_count << ", "
+         << "\"gamerscore\": " << game->total_gamerscore << ", "
+         << "\"iconPath\": \"" << JsonEscape(icon_path) << "\", "
+         << "\"coverPath\": \""
+         << JsonEscape(xe::path_to_utf8(game->cover_path)) << "\"}";
+  }
+  file << "\n  ]\n}\n";
+  return bool(file);
+}
+
 GameList GameLibrary::GetGames() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return games_;
@@ -444,6 +521,7 @@ void GameLibrary::AttachCover(const std::filesystem::path& root,
   for (const auto& candidate : candidates) {
     if (std::filesystem::exists(candidate, ec) &&
         ReadHostFile(candidate, kMaxCoverSize, &entry->cover_image)) {
+      entry->cover_path = candidate;
       return;
     }
   }
