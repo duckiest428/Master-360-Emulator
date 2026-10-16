@@ -11,6 +11,9 @@
 
 #include "xenia/emulator.h"
 
+#include <atomic>
+#include <thread>
+
 #include "config.h"
 #include "third_party/fmt/include/fmt/format.h"
 #include "third_party/tabulate/single_include/tabulate/tabulate.hpp"
@@ -1223,6 +1226,115 @@ void Emulator::Resume() {
       thread->thread()->Resume(nullptr);
     }
   }
+}
+
+bool Emulator::SuspendGuestThreads() {
+  if (guest_threads_suspended_) {
+    return true;
+  }
+  if (!kernel_state_ || !is_title_open()) {
+    return false;
+  }
+
+  // Pause audio first: its worker runs guest callbacks and must reach its
+  // pause point while guest threads can still make progress.
+  if (audio_system_) {
+    audio_system_->Pause();
+  }
+
+  constexpr int kMaxAttempts = 32;
+  for (int attempt = 0; attempt < kMaxAttempts; attempt++) {
+    // A thread frozen inside the host heap would deadlock the UI on its next
+    // allocation, so after suspending, the allocator is probed from a helper
+    // thread. The helper is created up front and nothing on this thread
+    // allocates between the first suspension and a successful probe.
+    std::atomic<bool> probe_go = false;
+    std::atomic<bool> probe_done = false;
+    std::thread heap_probe([&probe_go, &probe_done]() {
+      while (!probe_go) {
+        std::this_thread::yield();
+      }
+      // Volatile sink so the allocations can't be optimized away.
+      static void* volatile sink;
+      for (size_t size : {size_t(64), size_t(4096), size_t(1) << 20}) {
+        sink = std::malloc(size);
+        std::free(sink);
+      }
+      probe_done = true;
+    });
+
+    // Declared out here so its storage is only freed after the probe.
+    std::vector<kernel::object_ref<kernel::XThread>> threads;
+    {
+      auto global_lock = global_critical_region::AcquireDirect();
+      threads =
+          kernel_state()->object_table()->GetObjectsByType<kernel::XThread>(
+              kernel::XObject::Type::Thread);
+      kernel::XThread* current_thread = kernel::XThread::IsInThread()
+                                            ? kernel::XThread::GetCurrentThread()
+                                            : nullptr;
+      guest_suspended_threads_.reserve(threads.size());
+      for (auto& thread : threads) {
+        if (thread.get() == current_thread || !thread->can_debugger_suspend() ||
+            !thread->is_running()) {
+          continue;
+        }
+        if (thread->thread()->Suspend(nullptr)) {
+          guest_suspended_threads_.push_back(thread);
+        }
+      }
+    }
+
+    // A thread frozen inside XamInputGetState would hold the input lock
+    // forever and the UI could no longer read the controller.
+    bool safe = true;
+    if (input_system_) {
+      auto input_lock = input_system_->try_lock();
+      safe = input_lock.owns_lock();
+    }
+    probe_go = true;
+    for (int i = 0; i < 50 && !probe_done; i++) {
+      xe::threading::Sleep(std::chrono::milliseconds(1));
+    }
+    safe = safe && probe_done;
+
+    if (safe) {
+      heap_probe.join();
+      guest_threads_suspended_ = true;
+      XELOGI("Guest threads suspended ({} threads)",
+             guest_suspended_threads_.size());
+      return true;
+    }
+
+    for (auto& thread : guest_suspended_threads_) {
+      thread->thread()->Resume(nullptr);
+    }
+    guest_suspended_threads_.clear();
+    // Completes once the thread holding the heap lock (if any) runs again.
+    heap_probe.join();
+    xe::threading::Sleep(std::chrono::milliseconds(1));
+  }
+
+  XELOGW("Unable to reach a safe point to suspend guest threads");
+  if (audio_system_) {
+    audio_system_->Resume();
+  }
+  return false;
+}
+
+void Emulator::ResumeGuestThreads() {
+  if (!guest_threads_suspended_) {
+    return;
+  }
+  for (auto& thread : guest_suspended_threads_) {
+    thread->thread()->Resume(nullptr);
+  }
+  guest_suspended_threads_.clear();
+  guest_threads_suspended_ = false;
+  if (audio_system_) {
+    audio_system_->Resume();
+  }
+  XELOGI("Guest threads resumed");
 }
 
 bool Emulator::SaveToFile(const std::filesystem::path& path) {

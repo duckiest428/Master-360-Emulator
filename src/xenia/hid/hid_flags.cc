@@ -11,3 +11,9 @@
 
 DEFINE_bool(guide_button, true, "Forward guide button presses to guest.",
             "HID");
+
+DEFINE_bool(dashboard_guide, true,
+            "Open the Xbox Guide overlay when the Guide button is pressed. "
+            "While enabled the Guide button is consumed by the system and not "
+            "reported to titles, matching real hardware. Requires guide_button.",
+            "HID");

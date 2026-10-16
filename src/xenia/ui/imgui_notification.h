@@ -65,6 +65,8 @@ class ImGuiNotification {
 
   void SetDeletionPending() { marked_for_deletion_ = true; }
 
+  virtual bool IsAchievement() const { return false; }
+
  protected:
   ImGuiDrawer* GetDrawer() { return imgui_drawer_; }
 

@@ -168,6 +168,7 @@ void ImGuiDrawer::Initialize() {
 
   InitializeFonts(font_size);
   InitializeFonts(title_font_size);
+  LoadDashboardFonts(io);
 
 #ifdef XE_PLATFORM_LINUX
   io.SetClipboardTextFn = SetClipboardText;
@@ -257,6 +258,9 @@ std::optional<ImGuiKey> ImGuiDrawer::VirtualKeyToImGuiKey(VirtualKey vkey) {
       {ui::VirtualKey::kDown, ImGuiKey_DownArrow},
       {ui::VirtualKey::kHome, ImGuiKey_Home},
       {ui::VirtualKey::kEnd, ImGuiKey_End},
+      {ui::VirtualKey::kPrior, ImGuiKey_PageUp},
+      {ui::VirtualKey::kNext, ImGuiKey_PageDown},
+      {ui::VirtualKey::kSpace, ImGuiKey_Space},
       {ui::VirtualKey::kDelete, ImGuiKey_Delete},
       {ui::VirtualKey::kBack, ImGuiKey_Backspace},
       {ui::VirtualKey::kReturn, ImGuiKey_Enter},
@@ -524,6 +528,84 @@ void ImGuiDrawer::InitializeFonts(const float font_size) {
   LoadJapaneseFont(io, font_size);
 }
 
+void ImGuiDrawer::LoadDashboardFonts(ImGuiIO& io) {
+  // The Xbox 360 dashboard (NXE) uses the Segoe family; load the host copy.
+  std::filesystem::path fonts_dir;
+#if XE_PLATFORM_WIN32
+  PWSTR known_fonts_dir = nullptr;
+  if (SUCCEEDED(
+          SHGetKnownFolderPath(FOLDERID_Fonts, 0, NULL, &known_fonts_dir))) {
+    fonts_dir = std::wstring(known_fonts_dir);
+  }
+  CoTaskMemFree(static_cast<void*>(known_fonts_dir));
+#endif
+  if (fonts_dir.empty()) {
+    return;
+  }
+
+  static constexpr ImWchar dashboard_glyph_ranges[] = {
+      0x0020, 0x024F,  // Latin
+      0x0370, 0x03FF,  // Greek
+      0x0400, 0x04FF,  // Cyrillic
+      0x2000, 0x206F,  // General Punctuation
+      0x20A0, 0x20CF,  // Currency Symbols
+      0x2100, 0x214F,  // Letterlike Symbols
+      0,
+  };
+  static constexpr std::pair<DashboardFont, const char*> files[] = {
+      {DashboardFont::kLight, "segoeuil.ttf"},
+      {DashboardFont::kRegular, "segoeui.ttf"},
+      {DashboardFont::kSemibold, "seguisb.ttf"},
+  };
+  static constexpr float sizes[] = {20.f, 32.f, 52.f};
+
+  for (const auto& [weight, file_name] : files) {
+    const auto path = fonts_dir / file_name;
+    if (!std::filesystem::exists(path)) {
+      continue;
+    }
+    const std::string path_utf8 = xe::path_to_utf8(path);
+    for (const float size : sizes) {
+      ImFontConfig config;
+      config.OversampleH = 2;
+      config.OversampleV = 1;
+      config.PixelSnapH = false;
+      ImFont* font = io.Fonts->AddFontFromFileTTF(
+          path_utf8.c_str(), size, &config, dashboard_glyph_ranges);
+      if (font) {
+        dashboard_fonts_.push_back({weight, size, font});
+      }
+    }
+  }
+}
+
+ImFont* ImGuiDrawer::GetDashboardFont(DashboardFont weight, float pixel_size) {
+  // Prefer the smallest font at least as large as requested (downscaling
+  // looks better than upscaling), otherwise the largest available.
+  ImFont* smallest_fitting = nullptr;
+  float smallest_fitting_size = FLT_MAX;
+  ImFont* largest = nullptr;
+  float largest_size = 0.f;
+  for (const auto& entry : dashboard_fonts_) {
+    if (entry.weight != weight) {
+      continue;
+    }
+    if (entry.size >= pixel_size && entry.size < smallest_fitting_size) {
+      smallest_fitting = entry.font;
+      smallest_fitting_size = entry.size;
+    }
+    if (entry.size > largest_size) {
+      largest = entry.font;
+      largest_size = entry.size;
+    }
+  }
+  ImFont* best = smallest_fitting ? smallest_fitting : largest;
+  if (!best && weight != DashboardFont::kRegular) {
+    return GetDashboardFont(DashboardFont::kRegular, pixel_size);
+  }
+  return best ? best : GetIO().Fonts->Fonts[0];
+}
+
 void ImGuiDrawer::SetupFontTexture() {
   if (font_texture_ || !immediate_drawer_) {
     return;
@@ -644,7 +726,14 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
         });
 
     if (!guest_notifications.empty()) {
-      guest_notifications.front()->Draw();
+      ImGuiNotification* front = guest_notifications.front();
+      if (front != last_shown_guest_notification_) {
+        last_shown_guest_notification_ = front;
+        if (on_guest_notification_shown_) {
+          on_guest_notification_shown_(front->IsAchievement());
+        }
+      }
+      front->Draw();
     }
 
     if (!host_notifications.empty()) {

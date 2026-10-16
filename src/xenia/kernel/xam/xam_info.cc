@@ -497,7 +497,17 @@ void XamLoaderLaunchTitle_entry(lpstring_t raw_name_ptr, dword_t flags) {
   } else {
     title = "Title terminated";
     message = "Game requested exit to dashboard.";
-    assert_always("Game requested exit to dashboard via XamLoaderLaunchTitle");
+    if (!kernel_state()->emulator()->title_exit_handler) {
+      assert_always(
+          "Game requested exit to dashboard via XamLoaderLaunchTitle");
+    }
+  }
+
+  if (const auto& handler = kernel_state()->emulator()->title_exit_handler;
+      handler && handler()) {
+    // This function does not return.
+    kernel_state()->TerminateTitle();
+    return;
   }
 
   auto display_window = kernel_state()->emulator()->display_window();
@@ -530,7 +540,17 @@ DECLARE_XAM_EXPORT1(XamLoaderLaunchTitle, kNone, kSketchy);
 void XamLoaderTerminateTitle_entry() {
   std::string title = "Title terminated";
   std::string message = "Game requested exit to dashboard.";
-  assert_always("Game requested exit to dashboard via XamLoaderTerminateTitle");
+  if (!kernel_state()->emulator()->title_exit_handler) {
+    assert_always(
+        "Game requested exit to dashboard via XamLoaderTerminateTitle");
+  }
+
+  if (const auto& handler = kernel_state()->emulator()->title_exit_handler;
+      handler && handler()) {
+    // This function does not return.
+    kernel_state()->TerminateTitle();
+    return;
+  }
 
   auto display_window = kernel_state()->emulator()->display_window();
   auto imgui_drawer = kernel_state()->emulator()->imgui_drawer();

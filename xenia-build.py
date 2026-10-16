@@ -212,7 +212,9 @@ def import_vs_environment():
     env_tool_args = None
 
     vswhere = subprocess.check_output(
-        "tools/vswhere/vswhere.exe -version \"[17,)\" -latest -prerelease -format json -utf8 -products"
+        # Backslashes: some Windows builds fail CreateProcess on a relative
+        # path with forward slashes.
+        "tools\\vswhere\\vswhere.exe -version \"[17,)\" -latest -prerelease -format json -utf8 -products"
         " Microsoft.VisualStudio.Product.Enterprise"
         " Microsoft.VisualStudio.Product.Professional"
         " Microsoft.VisualStudio.Product.Community"
@@ -2131,7 +2133,7 @@ class DevenvCommand(Command):
                 # otherwise pick a VS without ARM64 support.
                 try:
                     vswhere_out = subprocess.check_output(
-                        "tools/vswhere/vswhere.exe"
+                        "tools\\vswhere\\vswhere.exe"
                         ' -version "[17,)" -latest -prerelease'
                         " -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64"
                         " -format json -utf8"

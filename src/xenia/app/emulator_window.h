@@ -31,6 +31,9 @@ namespace app {
 
 class ConsoleSettingsDialog;
 class ContentListDialog;
+namespace dashboard {
+class DashboardController;
+}  // namespace dashboard
 
 struct RecentTitleEntry {
   std::string title_name;
@@ -99,6 +102,14 @@ class EmulatorWindow {
   void ToggleXMPConfigDialog();
   void ToggleConsoleSettingsDialog();
   void ToggleContentListDialog();
+  void ToggleDisplayConfigDialog();
+  void ToggleControllerVibration();
+  void InstallContent();
+
+  const std::vector<RecentTitleEntry>& recently_launched_titles() const {
+    return recently_launched_titles_;
+  }
+  dashboard::DashboardController* dashboard() const { return dashboard_.get(); }
 
   void SetHotkeysState(bool enabled) { disable_hotkeys_ = !enabled; }
 
@@ -268,7 +279,6 @@ class EmulatorWindow {
   void OnMouseUp(const ui::MouseEvent& e);
   void FileOpen();
   void FileClose();
-  void InstallContent();
   void ExtractZarchive();
   void CreateZarchive();
   void ShowContentDirectory();
@@ -279,8 +289,6 @@ class EmulatorWindow {
   void CpuBreakIntoHostDebugger();
   void GpuTraceFrame();
   void GpuClearCaches();
-  void ToggleDisplayConfigDialog();
-  void ToggleControllerVibration();
   void ShowCompatibility();
   void ShowFAQ();
   void ShowBuildCommit();
@@ -330,6 +338,9 @@ class EmulatorWindow {
   std::unique_ptr<XMPConfigDialog> xmp_config_dialog_;
 
   std::vector<RecentTitleEntry> recently_launched_titles_;
+
+  // Xbox 360 dashboard shell and Xbox Guide.
+  std::unique_ptr<dashboard::DashboardController> dashboard_;
 };
 
 }  // namespace app

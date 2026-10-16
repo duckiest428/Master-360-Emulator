@@ -73,6 +73,8 @@ class AchievementNotificationWindow final : ImGuiGuestNotification {
       : ImGuiGuestNotification(imgui_drawer, title, description, user_index,
                                position_id) {};
 
+  bool IsAchievement() const override { return true; }
+
   void OnDraw(ImGuiIO& io) override;
 };
 

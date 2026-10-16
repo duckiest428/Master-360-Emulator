@@ -22,6 +22,7 @@
 
 #include "xenia/app/console_settings_dialog.h"
 #include "xenia/app/content_list_dialog.h"
+#include "xenia/app/dashboard/dashboard_controller.h"
 #include "xenia/base/assert.h"
 #include "xenia/base/clock.h"
 #include "xenia/base/cvar.h"
@@ -211,6 +212,8 @@ std::unique_ptr<EmulatorWindow> EmulatorWindow::Create(
 }
 
 EmulatorWindow::~EmulatorWindow() {
+  // The dashboard owns dialogs and textures; release them first.
+  dashboard_.reset();
   // Notify the ImGui drawer that the immediate drawer is being destroyed.
   ShutdownGraphicsSystemPresenterPainting();
 }
@@ -257,6 +260,10 @@ void EmulatorWindow::ShutdownGraphicsSystemPresenterPainting() {
 }
 
 void EmulatorWindow::OnEmulatorInitialized() {
+  // Created before any prompt below so prompts stack above the dashboard.
+  dashboard_ = std::make_unique<dashboard::DashboardController>(this);
+  dashboard_->Initialize();
+
   if (!emulator_->kernel_state()
            ->xam_state()
            ->profile_manager()
@@ -795,6 +802,32 @@ bool EmulatorWindow::Initialize() {
   }
   main_menu->AddChild(std::move(profile_menu));
 
+  // Dashboard menu
+  auto dashboard_menu = MenuItem::Create(MenuItem::Type::kPopup, "&Dashboard");
+  {
+    dashboard_menu->AddChild(
+        MenuItem::Create(MenuItem::Type::kString, "Xbox &Guide", "Ctrl+G",
+                         [this]() {
+                           if (dashboard_) {
+                             dashboard_->ToggleGuide();
+                           }
+                         }));
+    dashboard_menu->AddChild(MenuItem::Create(MenuItem::Type::kSeparator));
+    dashboard_menu->AddChild(MenuItem::Create(
+        MenuItem::Type::kString, "Choose Game Library Folder...", [this]() {
+          if (dashboard_) {
+            dashboard_->ChooseLibraryFolder();
+          }
+        }));
+    dashboard_menu->AddChild(MenuItem::Create(
+        MenuItem::Type::kString, "Search for New Games", [this]() {
+          if (dashboard_) {
+            dashboard_->RescanLibrary();
+          }
+        }));
+  }
+  main_menu->AddChild(std::move(dashboard_menu));
+
   // Content Menu
   auto content_menu = MenuItem::Create(MenuItem::Type::kPopup, "&Content");
   {
@@ -1050,6 +1083,12 @@ void EmulatorWindow::OnKeyDown(ui::KeyEvent& e) {
         return;
       }
       FileOpen();
+    } break;
+    case ui::VirtualKey::kG: {
+      if (!e.is_ctrl_pressed() || !dashboard_) {
+        return;
+      }
+      dashboard_->ToggleGuide();
     } break;
     case ui::VirtualKey::kMultiply: {
       CpuTimeScalarReset();

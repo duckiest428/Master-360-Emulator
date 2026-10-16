@@ -40,6 +40,10 @@ using IconsData = std::map<uint32_t, std::span<const uint8_t>>;
 
 constexpr ImVec2 default_image_icon_size = ImVec2(64.f, 64.f);
 
+// Font families used by the dashboard and guide. They are loaded from the
+// host system (Segoe UI on Windows) and fall back to the default UI font.
+enum class DashboardFont : uint8_t { kLight, kRegular, kSemibold };
+
 class ImGuiDrawer : public WindowInputListener, public UIDrawer {
  public:
   ImGuiDrawer(Window* window, size_t z_order);
@@ -94,6 +98,22 @@ class ImGuiDrawer : public WindowInputListener, public UIDrawer {
   void SetGuideButtonAction(std::function<void(uint8_t)> func);
 
   bool IsAnyDialogOpen() const { return !dialogs_.empty(); };
+  size_t GetDialogCount() const { return dialogs_.size(); }
+  // The most recently added dialog, which owns gamepad/keyboard focus.
+  ImGuiDialog* GetTopDialog() const {
+    return dialogs_.empty() ? nullptr : dialogs_.back();
+  }
+
+  // Returns the dashboard font of the given weight whose rasterized size is
+  // closest to (and preferably not below) pixel_size.
+  ImFont* GetDashboardFont(DashboardFont weight, float pixel_size);
+
+  // Invoked on the UI thread when a guest notification (achievement unlock,
+  // XNotify message) first becomes visible.
+  void SetGuestNotificationShownCallback(
+      std::function<void(bool is_achievement)> callback) {
+    on_guest_notification_shown_ = std::move(callback);
+  }
 
  protected:
   void OnKeyDown(KeyEvent& e) override;
@@ -112,6 +132,7 @@ class ImGuiDrawer : public WindowInputListener, public UIDrawer {
   bool LoadCustomFont(ImGuiIO& io, ImFontConfig& font_config, float font_size);
   bool LoadWindowsFont(ImGuiIO& io, ImFontConfig& font_config, float font_size);
   bool LoadJapaneseFont(ImGuiIO& io, float font_size);
+  void LoadDashboardFonts(ImGuiIO& io);
 
   void SetupNotificationTextures();
   void SetupFontTexture();
@@ -172,6 +193,16 @@ class ImGuiDrawer : public WindowInputListener, public UIDrawer {
   uint64_t last_frame_time_ticks_;
 
   bool are_notifications_enabled_ = true;
+
+  struct DashboardFontEntry {
+    DashboardFont weight;
+    float size;
+    ImFont* font;
+  };
+  std::vector<DashboardFontEntry> dashboard_fonts_;
+
+  const ImGuiNotification* last_shown_guest_notification_ = nullptr;
+  std::function<void(bool is_achievement)> on_guest_notification_shown_;
 };
 
 }  // namespace ui

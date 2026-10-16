@@ -302,6 +302,16 @@ class Emulator {
   void Pause();
   void Resume();
   bool is_paused() const { return paused_; }
+
+  // Suspends every guest-created thread (and pauses audio) so a system UI
+  // such as the Xbox Guide can be shown over a frozen title. Exactly the
+  // threads suspended here are resumed by ResumeGuestThreads. The GPU keeps
+  // presenting the last frame. Returns false if a safe suspension point
+  // could not be reached (a guest thread kept holding a host lock the UI
+  // needs), in which case nothing remains suspended.
+  bool SuspendGuestThreads();
+  void ResumeGuestThreads();
+  bool are_guest_threads_suspended() const { return guest_threads_suspended_; }
   bool SaveToFile(const std::filesystem::path& path);
   bool RestoreFromFile(const std::filesystem::path& path);
 
@@ -318,6 +328,12 @@ class Emulator {
   xe::Delegate<> on_patch_apply;
   xe::Delegate<> on_terminate;
   xe::Delegate<> on_exit;
+
+  // Invoked on the guest thread when the title exits to the dashboard or
+  // relaunches itself (XamLoaderTerminateTitle / XamLoaderLaunchTitle), after
+  // any launch data has been saved. Returning true replaces the default
+  // "please restart Xenia" message.
+  std::function<bool()> title_exit_handler;
 
  private:
   enum : uint64_t { EmulatorFlagDisclaimerAcknowledged = 1ULL << 0 };
@@ -376,6 +392,8 @@ class Emulator {
 
   bool paused_;
   bool restoring_;
+  bool guest_threads_suspended_ = false;
+  std::vector<kernel::object_ref<kernel::XThread>> guest_suspended_threads_;
   threading::Fence restore_fence_;  // Fired on restore finish.
 };
 

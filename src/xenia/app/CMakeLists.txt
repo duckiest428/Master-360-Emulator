@@ -15,6 +15,8 @@ target_sources(xenia-app PRIVATE
 
 # Other app sources (emulator_window, profile_dialogs, etc.)
 xe_platform_sources(xenia-app ${CMAKE_CURRENT_SOURCE_DIR})
+# Xbox 360 dashboard shell, game library and Xbox Guide.
+xe_platform_sources(xenia-app ${CMAKE_CURRENT_SOURCE_DIR}/dashboard)
 
 # Platform-specific entry points
 if(WIN32)
@@ -111,6 +113,7 @@ if(WIN32)
     xenia-gpu-d3d12
     xenia-hid-xinput
     xenia-ui-d3d12
+    winmm
   )
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_libraries(xenia-app PRIVATE

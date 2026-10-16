@@ -9,6 +9,7 @@
 
 #include "xenia/base/logging.h"
 #include "xenia/emulator.h"
+#include "xenia/hid/hid_flags.h"
 #include "xenia/hid/input.h"
 #include "xenia/hid/input_system.h"
 #include "xenia/kernel/kernel_state.h"
@@ -138,6 +139,12 @@ dword_result_t XamInputGetState_entry(dword_t user_index, dword_t flags,
     result = input_system->GetState(
         user_index, !flags ? X_INPUT_FLAG::X_INPUT_FLAG_GAMEPAD : flags,
         input_state);
+  }
+
+  if (input_state && result == X_ERROR_SUCCESS && cvars::dashboard_guide) {
+    // The Guide button belongs to the system (it opens the Xbox Guide).
+    input_state->gamepad.buttons = uint16_t(
+        input_state->gamepad.buttons & ~uint16_t(hid::X_INPUT_GAMEPAD_GUIDE));
   }
 
   if (input_state && result == X_ERROR_SUCCESS) {

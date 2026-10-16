@@ -267,5 +267,9 @@ X_INPUT_VIBRATION InputSystem::ModifyVibrationLevel(
 std::unique_lock<xe_unlikely_mutex> InputSystem::lock() {
   return std::unique_lock<xe_unlikely_mutex>{lock_};
 }
+
+std::unique_lock<xe_unlikely_mutex> InputSystem::try_lock() {
+  return std::unique_lock<xe_unlikely_mutex>{lock_, std::try_to_lock};
+}
 }  // namespace hid
 }  // namespace xe

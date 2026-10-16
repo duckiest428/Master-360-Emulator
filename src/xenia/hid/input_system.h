@@ -59,6 +59,8 @@ class InputSystem {
   Portal* GetPortal() { return portal_.get(); }
 
   std::unique_lock<xe_unlikely_mutex> lock();
+  // Non-blocking variant; check owns_lock() on the result.
+  std::unique_lock<xe_unlikely_mutex> try_lock();
 
  private:
   typedef std::pair<uint16_t, uint16_t> joystick_value;
