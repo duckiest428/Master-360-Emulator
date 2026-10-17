@@ -166,6 +166,10 @@ class DashboardController {
   void OnTitleLaunched();
   void OnTitleExitRequested();
   void OnGuestNotificationShown(bool is_achievement);
+  // Shell mode: signs in the shell's profile, creating it on first use.
+  void EnsureShellProfile();
+  // Writes the signed-in profile's summary for the shell.
+  void ExportProfileJson();
 
   EmulatorWindow* emulator_window_;
   std::unique_ptr<GameLibrary> library_;

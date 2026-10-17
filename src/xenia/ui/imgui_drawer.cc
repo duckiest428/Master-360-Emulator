@@ -639,6 +639,55 @@ void ImGuiDrawer::LoadDashboardFonts(ImGuiIO& io) {
   }
 }
 
+void ImGuiDrawer::SetToastIconImage(std::vector<uint8_t> png) {
+  toast_icon_image_ = std::move(png);
+  toast_icon_texture_.reset();
+}
+
+ImmediateTexture* ImGuiDrawer::GetToastIcon(uint8_t user_index) {
+  if (!toast_icon_image_.empty() && !toast_icon_texture_ && immediate_drawer_) {
+    int width, height, channels;
+    unsigned char* image = stbi_load_from_memory(
+        toast_icon_image_.data(), int(toast_icon_image_.size()), &width,
+        &height, &channels, STBI_rgb_alpha);
+    if (image) {
+      // Box-filter large artwork down: the texture has no mipmaps and the
+      // orb is drawn at well under 100 pixels.
+      const int factor = std::max(1, std::min(width, height) / 128);
+      const int out_width = width / factor, out_height = height / factor;
+      std::vector<uint8_t> pixels(size_t(out_width) * out_height * 4);
+      for (int y = 0; y < out_height; y++) {
+        for (int x = 0; x < out_width; x++) {
+          uint32_t sum[4] = {};
+          for (int sy = 0; sy < factor; sy++) {
+            const uint8_t* row =
+                image + (size_t(y * factor + sy) * width + x * factor) * 4;
+            for (int sx = 0; sx < factor * 4; sx++) {
+              sum[sx & 3] += row[sx];
+            }
+          }
+          for (int c = 0; c < 4; c++) {
+            pixels[(size_t(y) * out_width + x) * 4 + c] =
+                uint8_t(sum[c] / uint32_t(factor * factor));
+          }
+        }
+      }
+      stbi_image_free(image);
+      toast_icon_texture_ = immediate_drawer_->CreateTexture(
+          out_width, out_height, ImmediateTextureFilter::kLinear, true,
+          pixels.data());
+    }
+    if (!toast_icon_texture_) {
+      toast_icon_image_.clear();
+    }
+  }
+  if (toast_icon_texture_) {
+    return toast_icon_texture_.get();
+  }
+  return notification_icon_textures_.empty() ? nullptr
+                                             : GetNotificationIcon(user_index);
+}
+
 ImFont* ImGuiDrawer::GetDashboardFont(DashboardFont weight, float pixel_size) {
   // Prefer the smallest font at least as large as requested (downscaling
   // looks better than upscaling), otherwise the largest available.
@@ -707,6 +756,7 @@ void ImGuiDrawer::SetImmediateDrawer(ImmediateDrawer* new_immediate_drawer) {
     font_texture_.reset();
     locked_achievement_icon_.reset();
     notification_icon_textures_.clear();
+    toast_icon_texture_.reset();
   }
   immediate_drawer_ = new_immediate_drawer;
   if (immediate_drawer_) {

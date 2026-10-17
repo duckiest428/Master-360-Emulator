@@ -96,15 +96,33 @@ std::filesystem::path FindShellExecutable() {
              : std::filesystem::path();
 }
 
+std::filesystem::path FindShellAsset(const std::filesystem::path& relative) {
+  const std::filesystem::path shell = FindShellExecutable();
+  if (shell.empty()) {
+    return {};
+  }
+  std::error_code ec;
+  const auto path = shell.parent_path() / relative;
+  return std::filesystem::exists(path, ec) ? path : std::filesystem::path();
+}
+
+std::string ShellGamertag() {
+  const char* value = std::getenv(kShellEnvGamertag);
+  return value ? std::string(value) : std::string();
+}
+
 std::filesystem::path LibraryJsonPath(const std::filesystem::path& cache_root) {
   return cache_root / "dashboard" / "library.json";
+}
+
+std::filesystem::path ProfileJsonPath(const std::filesystem::path& cache_root) {
+  return cache_root / "dashboard" / "profile.json";
 }
 
 bool HandOffToShellIfNeeded(const std::filesystem::path& cache_root) {
   const bool export_only = EnvIsSet(kShellEnvExportOnly);
   if (!export_only) {
-    if (!cvars::dashboard || IsLaunchedFromShell() ||
-        !cvars::target.empty()) {
+    if (!cvars::dashboard || IsLaunchedFromShell() || !cvars::target.empty()) {
       return false;
     }
     // A title asked to be relaunched: let Xenia boot it.

@@ -9,7 +9,9 @@
 
 #include "xenia/app/dashboard/dashboard_controller.h"
 
+#include <algorithm>
 #include <cstdlib>
+#include <fstream>
 
 #include "third_party/fmt/include/fmt/format.h"
 #include "xenia/app/dashboard/dashboard_shell.h"
@@ -37,6 +39,7 @@
 #include "xenia/kernel/xam/ui/title_info_ui.h"
 #include "xenia/kernel/xam/user_settings.h"
 #include "xenia/kernel/xam/xam_state.h"
+#include "xenia/kernel/xconfig.h"
 #include "xenia/ui/file_picker.h"
 #include "xenia/ui/imgui_drawer.h"
 
@@ -76,6 +79,7 @@ DEFINE_bool(guide_suspends_title, true,
             "Dashboard");
 
 DECLARE_string(notification_sound_path);
+DECLARE_bool(show_achievement_notification);
 
 namespace xe {
 namespace app {
@@ -154,14 +158,36 @@ ui::ImGuiDrawer* DashboardController::imgui_drawer() const {
 
 void DashboardController::Initialize() {
   Emulator* emu = emulator();
+  if (IsLaunchedFromShell()) {
+    // Follow the shell's Guide style and console language for this session.
+    if (const char* style = std::getenv("XENIA_DASHBOARD_GUIDE_STYLE");
+        style && style[0]) {
+      cvars::guide_style = style;
+    }
+  }
   library_ = std::make_unique<GameLibrary>(emu->cache_root() / "dashboard");
-  audio_ = std::make_unique<DashboardAudio>(emu->storage_root() / "dashboard" /
-                                            "sounds");
+  // The console's own interface sounds ship with DashX360.
+  audio_ = std::make_unique<DashboardAudio>(
+      emu->storage_root() / "dashboard" / "sounds",
+      FindShellAsset(std::filesystem::path("Assets") / "Audio" / "Sounds"));
+  audio_->SetTheme(guide_metro() ? SoundTheme::kMetro : SoundTheme::kBlades);
   audio_->SetEnabled(cvars::dashboard_sounds);
   textures_ = std::make_unique<TextureCache>(imgui_drawer());
 
+  // Achievement and sign-in toasts use the console's orb from DashX360.
+  if (const auto orb = FindShellAsset(std::filesystem::path("Assets") / "Misc" /
+                                      "SignIn" / "xbox-orb.png");
+      !orb.empty()) {
+    std::ifstream file(orb, std::ios::binary);
+    imgui_drawer()->SetToastIconImage(
+        std::vector<uint8_t>((std::istreambuf_iterator<char>(file)),
+                             std::istreambuf_iterator<char>()));
+  }
+
   imgui_drawer()->SetGuestNotificationShownCallback(
-      [this](bool is_achievement) { OnGuestNotificationShown(is_achievement); });
+      [this](bool is_achievement) {
+        OnGuestNotificationShown(is_achievement);
+      });
 
   emu->on_launch.AddListener([this](uint32_t, const std::string_view) {
     emulator_window_->app_context().CallInUIThreadDeferred(
@@ -169,10 +195,16 @@ void DashboardController::Initialize() {
   });
 
   if (cvars::dashboard) {
+    // The console always announces unlocked achievements.
+    cvars::show_achievement_notification = true;
     emu->title_exit_handler = [this]() {
       OnTitleExitRequested();
       return true;
     };
+  }
+
+  if (IsLaunchedFromShell()) {
+    EnsureShellProfile();
   }
 
   // When the shell started us for a title, it owns the library and home.
@@ -215,6 +247,7 @@ bool DashboardController::guide_metro() const {
 
 void DashboardController::ToggleGuideStyle() {
   OVERRIDE_string(guide_style, guide_metro() ? "blades" : "metro");
+  audio_->SetTheme(guide_metro() ? SoundTheme::kMetro : SoundTheme::kBlades);
   config::SaveConfig();
 }
 
@@ -302,7 +335,10 @@ ProfileCard DashboardController::GetProfileCard(uint8_t user_index) {
 
 std::vector<kernel::xam::TitleInfo> DashboardController::GetPlayedTitles(
     uint64_t xuid) {
-  return emulator()->kernel_state()->xam_state()->user_tracker()
+  return emulator()
+      ->kernel_state()
+      ->xam_state()
+      ->user_tracker()
       ->GetPlayedTitles(xuid);
 }
 
@@ -367,6 +403,9 @@ void DashboardController::HideDashboard() { dashboard_.reset(); }
 
 void DashboardController::OnTitleLaunched() {
   HideDashboard();
+  if (IsLaunchedFromShell()) {
+    ExportProfileJson();
+  }
   if (guide_ && !guide_->in_title()) {
     guide_.reset();
   }
@@ -560,6 +599,7 @@ void DashboardController::RestartToDashboard() {
   config::SaveConfig();
   if (IsLaunchedFromShell()) {
     // The shell is waiting for this process; closing it returns there.
+    ExportProfileJson();
     XELOGI("Dashboard: closing title, returning to the dashboard shell");
     xe::FlushLog();
     std::quick_exit(0);
@@ -630,8 +670,7 @@ void DashboardController::OpenAchievementsList(uint8_t user_index) {
     ShowToast("Sign in to a profile to view achievements.");
     return;
   }
-  new kernel::xam::ui::TitleListUI(imgui_drawer(), ImVec2(60.f, 60.f),
-                                   profile);
+  new kernel::xam::ui::TitleListUI(imgui_drawer(), ImVec2(60.f, 60.f), profile);
 }
 
 void DashboardController::OpenTitleAchievements(uint8_t user_index,
@@ -644,9 +683,8 @@ void DashboardController::OpenTitleAchievements(uint8_t user_index,
   }
   for (const auto& info : GetPlayedTitles(profile->xuid())) {
     if (info.id == title_id) {
-      new kernel::xam::ui::GameAchievementsUI(imgui_drawer(),
-                                              ImVec2(60.f, 60.f), &info,
-                                              profile);
+      new kernel::xam::ui::GameAchievementsUI(
+          imgui_drawer(), ImVec2(60.f, 60.f), &info, profile);
       return;
     }
   }
@@ -707,12 +745,172 @@ float DashboardController::toast_age() const {
 
 void DashboardController::OnGuestNotificationShown(bool is_achievement) {
   card_cache_.clear();
+  if (is_achievement && IsLaunchedFromShell()) {
+    ExportProfileJson();
+  }
   if (!cvars::notification_sound_path.empty()) {
     // The user's configured notification sound already plays.
     return;
   }
   audio_->Play(is_achievement ? SoundEvent::kAchievement
                               : SoundEvent::kNotification);
+}
+
+// ---------------------------------------------------------------------------
+// Shell profile
+// ---------------------------------------------------------------------------
+
+namespace {
+
+std::string JsonString(std::string_view text) {
+  std::string out = "\"";
+  for (const char c : text) {
+    switch (c) {
+      case '"':
+        out += "\\\"";
+        break;
+      case '\\':
+        out += "\\\\";
+        break;
+      case '\n':
+        out += "\\n";
+        break;
+      default:
+        if (uint8_t(c) < 0x20) {
+          out += fmt::format("\\u{:04x}", uint8_t(c));
+        } else {
+          out += c;
+        }
+    }
+  }
+  return out + "\"";
+}
+
+}  // namespace
+
+void DashboardController::EnsureShellProfile() {
+  const std::string gamertag = ShellGamertag();
+  if (gamertag.empty()) {
+    return;
+  }
+  auto* profile_manager =
+      emulator()->kernel_state()->xam_state()->profile_manager();
+  auto find_account = [&]() -> uint64_t {
+    for (const auto& [xuid, account] : *profile_manager->GetAccounts()) {
+      if (xe::utf8::lower_ascii(account.GetGamertagString()) ==
+          xe::utf8::lower_ascii(gamertag)) {
+        return xuid;
+      }
+    }
+    return 0;
+  };
+  uint64_t xuid = find_account();
+  if (!xuid) {
+    if (!kernel::xam::ProfileManager::IsGamertagValid(gamertag) ||
+        !profile_manager->CreateProfile(gamertag, false)) {
+      XELOGE("Dashboard: unable to create a profile for {}", gamertag);
+      return;
+    }
+    xuid = find_account();
+    XELOGI("Dashboard: created profile {} ({:016X}) for the shell", gamertag,
+           xuid);
+  }
+  if (!xuid) {
+    return;
+  }
+  auto* signed_in = profile_manager->GetProfile(uint8_t(0));
+  if (!signed_in || signed_in->xuid() != xuid) {
+    profile_manager->Login(xuid, 0);
+    config::SaveConfig();
+  }
+
+  // Console language chosen in the shell: games read it from the console
+  // config, or from the signed-in profile.
+  if (const char* language = std::getenv("XENIA_DASHBOARD_LANGUAGE")) {
+    const uint32_t code = uint32_t(std::atoi(language));
+    if (code > 0 && code < uint32_t(XLanguage::kMaxLanguages)) {
+      auto* xconfig = emulator()->kernel_state()->xconfig();
+      if (xconfig->ReadSetting<uint32_t>(kernel::XCONFIG_USER_CATEGORY,
+                                         kernel::XCONFIG_USER_LANGUAGE) !=
+          code) {
+        xconfig->WriteSetting(kernel::XCONFIG_USER_CATEGORY,
+                              kernel::XCONFIG_USER_LANGUAGE, &code);
+      }
+      if (const auto* account = profile_manager->GetAccount(xuid);
+          account && uint32_t(account->GetLanguage()) != code) {
+        auto updated = *account;
+        updated.SetLanguage(XLanguage(code));
+        profile_manager->UpdateAccount(xuid, &updated);
+      }
+    }
+  }
+
+  // Use the shell's gamer picture (a 64x64 PNG) for the profile.
+  if (const char* picture = std::getenv("XENIA_DASHBOARD_GAMERPIC")) {
+    std::ifstream file(xe::to_path(std::string_view(picture)),
+                       std::ios::binary);
+    std::vector<uint8_t> png((std::istreambuf_iterator<char>(file)),
+                             std::istreambuf_iterator<char>());
+    auto* profile = profile_manager->GetProfile(uint8_t(0));
+    if (profile && png.size() > 8) {
+      const auto current =
+          profile->GetProfileIcon(kernel::xam::XTileType::kGamerTile);
+      if (!std::ranges::equal(current, png)) {
+        emulator()->kernel_state()->xam_state()->user_tracker()->UpdateUserIcon(
+            xuid, png);
+      }
+    }
+  }
+  card_cache_.clear();
+  ExportProfileJson();
+}
+
+void DashboardController::ExportProfileJson() {
+  auto* profile =
+      emulator()->kernel_state()->xam_state()->profile_manager()->GetProfile(
+          uint8_t(0));
+  if (!profile) {
+    return;
+  }
+  card_cache_.erase(0);
+  const ProfileCard card = GetProfileCard(0);
+  std::string json = "{\n";
+  json += fmt::format("  \"gamertag\": {},\n", JsonString(card.gamertag));
+  json += fmt::format("  \"xuid\": \"{:016X}\",\n", card.xuid);
+  json += fmt::format("  \"gamerscore\": {},\n", card.gamerscore);
+  json += fmt::format("  \"achievements\": {},\n", card.achievements_unlocked);
+  json += "  \"titles\": [";
+  bool first = true;
+  for (const auto& title : GetPlayedTitles(card.xuid)) {
+    if (title.id == kernel::kDashboardID) {
+      continue;
+    }
+    json += first ? "\n" : ",\n";
+    first = false;
+    json += fmt::format(
+        "    {{\"titleId\": \"{:08X}\", \"name\": {}, \"unlocked\": {}, "
+        "\"total\": {}, \"gamerscore\": {}, \"maxGamerscore\": {}}}",
+        title.id, JsonString(xe::to_utf8(title.title_name)),
+        title.unlocked_achievements_count, title.achievements_count,
+        title.title_earned_gamerscore, title.gamerscore_amount);
+  }
+  json += first ? "]\n}\n" : "\n  ]\n}\n";
+
+  // Write then rename, so the shell never reads a partial file.
+  const auto path = ProfileJsonPath(emulator()->cache_root());
+  std::error_code ec;
+  std::filesystem::create_directories(path.parent_path(), ec);
+  auto temp = path;
+  temp += ".tmp";
+  {
+    std::ofstream file(temp, std::ios::binary | std::ios::trunc);
+    file << json;
+  }
+  std::filesystem::rename(temp, path, ec);
+  if (ec) {
+    XELOGW("Dashboard: unable to write {}: {}", xe::path_to_utf8(path),
+           ec.message());
+  }
 }
 
 }  // namespace dashboard

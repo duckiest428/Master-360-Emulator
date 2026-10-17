@@ -1,7 +1,13 @@
 diff --git a/XboxMetroLauncher/MainWindow.xaml b/XboxMetroLauncher/MainWindow.xaml
-index 1e8a46b..b1116f0 100644
+index 210cd2d..b1116f0 100644
 --- a/XboxMetroLauncher/MainWindow.xaml
 +++ b/XboxMetroLauncher/MainWindow.xaml
+@@ -1,4 +1,4 @@
+-﻿<Window x:Class="XboxMetroLauncher.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:wfi="clr-namespace:System.Windows.Forms.Integration;assembly=WindowsFormsIntegration" xmlns:controls="clr-namespace:XboxMetroLauncher.Controls" Title="DashX360" Width="1280" Height="720" MinWidth="1024" MinHeight="576" Background="{StaticResource DashboardBackgroundBrush}" WindowStartupLocation="CenterScreen" xmlns:xboxmetrolauncher="clr-namespace:XboxMetroLauncher" PreviewKeyDown="Window_OnPreviewKeyDown" PreviewMouseDown="Window_OnPreviewMouseDown" PreviewMouseMove="Window_OnPreviewMouseMove" Loaded="Window_OnLoaded" Closing="Window_OnClosing">
++<Window x:Class="XboxMetroLauncher.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:wfi="clr-namespace:System.Windows.Forms.Integration;assembly=WindowsFormsIntegration" xmlns:controls="clr-namespace:XboxMetroLauncher.Controls" Title="DashX360" Width="1280" Height="720" MinWidth="1024" MinHeight="576" Background="{StaticResource DashboardBackgroundBrush}" WindowStartupLocation="CenterScreen" xmlns:xboxmetrolauncher="clr-namespace:XboxMetroLauncher" PreviewKeyDown="Window_OnPreviewKeyDown" PreviewMouseDown="Window_OnPreviewMouseDown" PreviewMouseMove="Window_OnPreviewMouseMove" Loaded="Window_OnLoaded" Closing="Window_OnClosing">
+   <FrameworkElement.Resources>
+     <ResourceDictionary>
+       <ResourceDictionary.MergedDictionaries>
 @@ -2545,6 +2545,7 @@
                <StackPanel Margin="0,0,0,18">
                  <TextBlock Text="Add items to" Foreground="#FF333333" FontSize="15" Margin="30,12,30,0" />
@@ -11,21 +17,601 @@ index 1e8a46b..b1116f0 100644
                  <Button Content="Steam Setup" Style="{StaticResource SystemSettingsOptionButtonStyle}" Tag="Steam Setup|Configure Steam Web API and profile details for richer game metadata." Command="{Binding OpenSteamSetupCommand}" GotKeyboardFocus="SettingsOption_OnFocusOrMouseEnter" MouseEnter="SettingsOption_OnFocusOrMouseEnter" />
                  <Button Content="Add Executable" Style="{StaticResource SystemSettingsOptionButtonStyle}" Tag="Add Executable|Add a local game or app executable manually." Command="{Binding AddGameCommand}" GotKeyboardFocus="SettingsOption_OnFocusOrMouseEnter" MouseEnter="SettingsOption_OnFocusOrMouseEnter" />
 diff --git a/XboxMetroLauncher/XboxMetroLauncher/MainWindow.cs b/XboxMetroLauncher/XboxMetroLauncher/MainWindow.cs
-index 9fe880a..6be2ed3 100644
+index 9fe880a..d655296 100644
 --- a/XboxMetroLauncher/XboxMetroLauncher/MainWindow.cs
 +++ b/XboxMetroLauncher/XboxMetroLauncher/MainWindow.cs
-@@ -641,6 +641,11 @@ public partial class MainWindow : Window
+@@ -136,6 +136,12 @@ public partial class MainWindow : Window
+ 
+ 	private IGuideWindow? _guideWindow;
+ 
++	// Initial setup and System Settings, drawn over the dashboard.
++	private X360SystemOverlay? _systemOverlay;
++
++	// The dashboard's startup (sound, sign-in toast) waits for initial setup.
++	private bool _startupWaitingForSetup;
++
+ 	private GuideViewModel? _guideViewModel;
+ 
+ 	private UIElement? _guideReturnFocusElement;
+@@ -255,6 +261,7 @@ public partial class MainWindow : Window
+ 		_viewModel.PartyOverlayRequested += ViewModel_OnPartyOverlayRequested;
+ 		_viewModel.AchievementOverlayRequested += ViewModel_OnAchievementOverlayRequested;
+ 		_viewModel.ToastRequested += ViewModel_OnToastRequested;
++		_viewModel.SystemSettingsRequested += ShowSystemSettings;
+ 		ApplyDisplaySettings();
+ 	}
+ 
+@@ -318,7 +325,7 @@ public partial class MainWindow : Window
+ 			UpdateAdjacentPreviewSnapshots();
+ 			WritePerformanceDebugReport();
+ 			_startupInitializationComplete = true;
+-			if (!_viewModel.IsBooting && !StartFakeLoadingIfReady())
++			if (!_viewModel.IsBooting && _systemOverlay?.IsInitialSetup != true && !StartFakeLoadingIfReady())
+ 			{
+ 				PlayStartupSound();
+ 				ScheduleStartupPrewarm();
+@@ -469,6 +476,10 @@ public partial class MainWindow : Window
+ 			SkipBootIntro(userInitiated: true);
+ 			e.Handled = true;
+ 		}
++		else if (_systemOverlay?.IsOpen == true)
++		{
++			e.Handled = _systemOverlay.HandleKey(e);
++		}
+ 		else if (DashboardInputRouter.TryMapKey(e, out action))
+ 		{
+ 			e.Handled = true;
+@@ -525,6 +536,14 @@ public partial class MainWindow : Window
+ 	private void HandleControllerInputAction(DashboardInputAction action)
+ 	{
+ 		HideMouseCursorForController();
++		if (_systemOverlay?.IsOpen == true)
++		{
++			if (!_viewModel.IsBooting && base.IsActive)
++			{
++				_systemOverlay.HandleInput(action);
++			}
++			return;
++		}
+ 		if (TryRouteInputToGuide(action))
+ 		{
+ 			return;
+@@ -641,6 +660,11 @@ public partial class MainWindow : Window
  		}
  		if (action == DashboardInputAction.Guide)
  		{
 +			// Xenia shows its own in-game Guide while an Xbox 360 game runs.
-+			if (XeniaIntegration.IsXeniaGameRunning)
++			if (XeniaIntegration.IsXeniaGameRunning || _systemOverlay?.IsOpen == true)
 +			{
 +				return;
 +			}
  			if (TryHandleActiveToastAction())
  			{
  				return;
+@@ -1240,6 +1264,64 @@ public partial class MainWindow : Window
+ 		_restoreFocusAfterGuideClose = false;
+ 	}
+ 
++	private X360SystemOverlay EnsureSystemOverlay()
++	{
++		if (_systemOverlay != null)
++		{
++			return _systemOverlay;
++		}
++		_systemOverlay = new X360SystemOverlay(new X360SystemHost
++		{
++			PlaySound = name => _audioService.Play(name),
++			Settings = _viewModel.Settings,
++			Profile = () => _viewModel.Profile,
++			SaveAsync = _viewModel.SaveSettingsAndProfileAsync,
++			OpenDashboardSettings = () => _viewModel.OpenLauncherSettingsCommand.Execute(null)
++		});
++		_systemOverlay.Closed += SystemOverlay_OnClosed;
++		if (base.Content is System.Windows.Controls.Panel root)
++		{
++			root.Children.Add(_systemOverlay);
++		}
++		return _systemOverlay;
++	}
++
++	private void ShowSystemSettings()
++	{
++		if (_viewModel.IsBooting || _systemOverlay?.IsOpen == true)
++		{
++			return;
++		}
++		_audioService.Play("menu-in");
++		EnsureSystemOverlay().OpenSystemSettings();
++	}
++
++	private async void SystemOverlay_OnClosed(X360SetupResult? result)
++	{
++		try
++		{
++			if (result != null)
++			{
++				await _viewModel.CompleteInitialSetupAsync(result.Gamertag, result.GamerPicturePath, result.JoinedXboxLive);
++			}
++			if (_startupWaitingForSetup)
++			{
++				_startupWaitingForSetup = false;
++				if (_startupInitializationComplete && !StartFakeLoadingIfReady())
++				{
++					PlayStartupSound();
++					ScheduleStartupPrewarm();
++					_ = RunSignInToastSequenceAsync();
++				}
++			}
++			FocusFirstButton();
++		}
++		catch (Exception exception)
++		{
++			App.LogException(exception, "MainWindow.SystemOverlay_OnClosed");
++		}
++	}
++
+ 	private void StartBootVideo()
+ 	{
+ 		bool useBladesStartup = ShouldUseBladesStartupVideoAudio();
+@@ -1498,8 +1580,10 @@ public partial class MainWindow : Window
+ 		{
+ 			text = "Player";
+ 		}
+-		_viewModel.NotificationToastLine1 = string.IsNullOrWhiteSpace(line1) ? (text + " signed") : line1;
+-		_viewModel.NotificationToastLine2 = string.IsNullOrWhiteSpace(line2) ? "in to Xbox LIVE" : line2;
++		// Offline profiles just sign in; only Xbox LIVE members see "to Xbox LIVE".
++		bool offline = string.Equals(_viewModel.Profile?.OnlineStatus, "Offline", StringComparison.OrdinalIgnoreCase);
++		_viewModel.NotificationToastLine1 = string.IsNullOrWhiteSpace(line1) ? (offline ? text : text + " signed") : line1;
++		_viewModel.NotificationToastLine2 = string.IsNullOrWhiteSpace(line2) ? (offline ? "signed in" : "in to Xbox LIVE") : line2;
+ 	}
+ 
+ 	private void PlayBootIntroSound()
+@@ -1562,6 +1646,17 @@ public partial class MainWindow : Window
+ 				_audioService.Stop("startup");
+ 				CleanupBootBrowser();
+ 			}
++			if (!_viewModel.Settings.InitialSetupComplete)
++			{
++				if (!userInitiated)
++				{
++					ScheduleBootBrowserCleanup();
++				}
++				_viewModel.IsBooting = false;
++				_startupWaitingForSetup = true;
++				EnsureSystemOverlay().BeginInitialSetup();
++				return;
++			}
+ 			bool num = StartFakeLoadingIfReady(bootHandoff: true);
+ 			if (!userInitiated)
+ 			{
+diff --git a/XboxMetroLauncher/XboxMetroLauncher.Controls/RotatingTile.cs b/XboxMetroLauncher/XboxMetroLauncher.Controls/RotatingTile.cs
+new file mode 100644
+index 0000000..7d4f31d
+--- /dev/null
++++ b/XboxMetroLauncher/XboxMetroLauncher.Controls/RotatingTile.cs
+@@ -0,0 +1,367 @@
++using System;
++using System.Collections.Generic;
++using System.IO;
++using System.Linq;
++using System.Windows;
++using System.Windows.Controls;
++using System.Windows.Media;
++using System.Windows.Media.Animation;
++using System.Windows.Media.Imaging;
++using System.Windows.Threading;
++using XboxMetroLauncher.Services;
++using XboxMetroLauncher.Utilities;
++
++namespace XboxMetroLauncher.Controls;
++
++// A spotlight tile whose content rotates like the console's live tiles: every
++// few seconds the next picture slides up into place with its caption.
++//
++// Slides come from, in order: PrimarySource/PrimaryTitle (the tile's own,
++// possibly customized, art), Items ("path|title|subtitle;..."), and, when
++// IncludeXbox360Games is set, the covers of the Xbox 360 games in the library.
++// With MusicFolder set, the slides are the songs in DashX360's music folder.
++public sealed class RotatingTile : Grid
++{
++	public static readonly DependencyProperty PrimarySourceProperty = DependencyProperty.Register(nameof(PrimarySource), typeof(ImageSource), typeof(RotatingTile), new PropertyMetadata(null, OnSlidesChanged));
++
++	public static readonly DependencyProperty PrimaryTitleProperty = DependencyProperty.Register(nameof(PrimaryTitle), typeof(string), typeof(RotatingTile), new PropertyMetadata(string.Empty, OnSlidesChanged));
++
++	public static readonly DependencyProperty PrimarySubtitleProperty = DependencyProperty.Register(nameof(PrimarySubtitle), typeof(string), typeof(RotatingTile), new PropertyMetadata(string.Empty, OnSlidesChanged));
++
++	public static readonly DependencyProperty ItemsProperty = DependencyProperty.Register(nameof(Items), typeof(string), typeof(RotatingTile), new PropertyMetadata(string.Empty, OnSlidesChanged));
++
++	public static readonly DependencyProperty IncludeXbox360GamesProperty = DependencyProperty.Register(nameof(IncludeXbox360Games), typeof(bool), typeof(RotatingTile), new PropertyMetadata(false, OnSlidesChanged));
++
++	public static readonly DependencyProperty MusicFolderProperty = DependencyProperty.Register(nameof(MusicFolder), typeof(bool), typeof(RotatingTile), new PropertyMetadata(false, OnSlidesChanged));
++
++	public static readonly DependencyProperty IntervalProperty = DependencyProperty.Register(nameof(Interval), typeof(double), typeof(RotatingTile), new PropertyMetadata(7.0));
++
++	public static readonly DependencyProperty CaptionSizeProperty = DependencyProperty.Register(nameof(CaptionSize), typeof(double), typeof(RotatingTile), new PropertyMetadata(19.0));
++
++	public static readonly DependencyProperty DecodeWidthProperty = DependencyProperty.Register(nameof(DecodeWidth), typeof(int), typeof(RotatingTile), new PropertyMetadata(512));
++
++	private static readonly Random Stagger = new Random();
++
++	private readonly DispatcherTimer _timer = new DispatcherTimer();
++
++	private readonly List<Slide> _slides = new List<Slide>();
++
++	private Grid? _front;
++
++	private int _index;
++
++	private bool _dirty = true;
++
++	// Icon slides show a small picture (a game's 64x64 icon) centered.
++	private sealed record Slide(ImageSource? Image, string Title, string Subtitle, bool Icon = false);
++
++	public RotatingTile()
++	{
++		ClipToBounds = true;
++		_timer.Tick += (_, _) => Advance();
++		Loaded += (_, _) =>
++		{
++			Rebuild();
++			// Tiles on the same channel shouldn't all turn at once.
++			_timer.Interval = TimeSpan.FromSeconds(Math.Max(2, Interval) + Stagger.NextDouble() * 2.5);
++			_timer.Start();
++		};
++		Unloaded += (_, _) => _timer.Stop();
++		IsVisibleChanged += (_, _) =>
++		{
++			if (IsVisible)
++			{
++				_timer.Start();
++			}
++			else
++			{
++				_timer.Stop();
++			}
++		};
++	}
++
++	public ImageSource? PrimarySource
++	{
++		get => (ImageSource?)GetValue(PrimarySourceProperty);
++		set => SetValue(PrimarySourceProperty, value);
++	}
++
++	public string PrimaryTitle
++	{
++		get => (string)GetValue(PrimaryTitleProperty);
++		set => SetValue(PrimaryTitleProperty, value);
++	}
++
++	public string PrimarySubtitle
++	{
++		get => (string)GetValue(PrimarySubtitleProperty);
++		set => SetValue(PrimarySubtitleProperty, value);
++	}
++
++	public string Items
++	{
++		get => (string)GetValue(ItemsProperty);
++		set => SetValue(ItemsProperty, value);
++	}
++
++	public bool IncludeXbox360Games
++	{
++		get => (bool)GetValue(IncludeXbox360GamesProperty);
++		set => SetValue(IncludeXbox360GamesProperty, value);
++	}
++
++	public bool MusicFolder
++	{
++		get => (bool)GetValue(MusicFolderProperty);
++		set => SetValue(MusicFolderProperty, value);
++	}
++
++	public double Interval
++	{
++		get => (double)GetValue(IntervalProperty);
++		set => SetValue(IntervalProperty, value);
++	}
++
++	public double CaptionSize
++	{
++		get => (double)GetValue(CaptionSizeProperty);
++		set => SetValue(CaptionSizeProperty, value);
++	}
++
++	public int DecodeWidth
++	{
++		get => (int)GetValue(DecodeWidthProperty);
++		set => SetValue(DecodeWidthProperty, value);
++	}
++
++	private static void OnSlidesChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
++	{
++		RotatingTile tile = (RotatingTile)d;
++		tile._dirty = true;
++		if (tile.IsLoaded)
++		{
++			tile.Rebuild();
++		}
++	}
++
++	private void Rebuild()
++	{
++		if (!_dirty)
++		{
++			return;
++		}
++		_dirty = false;
++		_slides.Clear();
++		if (MusicFolder)
++		{
++			_slides.AddRange(MusicSlides());
++		}
++		else
++		{
++			if (PrimarySource != null || !string.IsNullOrEmpty(PrimaryTitle))
++			{
++				_slides.Add(new Slide(PrimarySource, PrimaryTitle ?? string.Empty, PrimarySubtitle ?? string.Empty));
++			}
++			if (IncludeXbox360Games)
++			{
++				_slides.AddRange(XeniaIntegration.GetLibraryArt().Select(art => new Slide(Load(art.CoverPath), art.Title, "Xbox 360", art.IsIcon)));
++			}
++			foreach (string item in (Items ?? string.Empty).Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
++			{
++				string[] parts = item.Split('|');
++				_slides.Add(new Slide(Load(parts[0]), parts.Length > 1 ? parts[1] : string.Empty, parts.Length > 2 ? parts[2] : string.Empty));
++			}
++		}
++		_index = 0;
++		Children.Clear();
++		_front = null;
++		if (_slides.Count > 0)
++		{
++			Show(_slides[0], animate: false);
++		}
++	}
++
++	private IEnumerable<Slide> MusicSlides()
++	{
++		List<string> songs = new List<string>();
++		try
++		{
++			string folder = Path.Combine(AppPaths.AppFolder, "Assets", "Custom Files", "Music Files");
++			if (Directory.Exists(folder))
++			{
++				string[] extensions = { ".mp3", ".wav", ".wma", ".m4a", ".aac", ".flac" };
++				songs = Directory.EnumerateFiles(folder, "*.*", SearchOption.AllDirectories)
++					.Where(f => extensions.Contains(Path.GetExtension(f), StringComparer.OrdinalIgnoreCase))
++					.Take(400)
++					.ToList();
++			}
++		}
++		catch
++		{
++		}
++		if (songs.Count == 0)
++		{
++			yield return new Slide(null, PrimaryTitle, "Add songs to Assets\\Custom Files\\Music Files");
++			yield break;
++		}
++		Random random = new Random();
++		foreach (string song in songs.OrderBy(_ => random.Next()).Take(24))
++		{
++			string name = Path.GetFileNameWithoutExtension(song).Replace('_', ' ');
++			string artist = Path.GetFileName(Path.GetDirectoryName(song)) ?? string.Empty;
++			if (string.Equals(artist, "Music Files", StringComparison.OrdinalIgnoreCase))
++			{
++				artist = songs.Count + (songs.Count == 1 ? " song" : " songs");
++			}
++			yield return new Slide(null, name, artist);
++		}
++	}
++
++	private ImageSource? Load(string path)
++	{
++		if (string.IsNullOrWhiteSpace(path))
++		{
++			return null;
++		}
++		try
++		{
++			string full = Path.IsPathRooted(path) ? path : AppPaths.FindFile(path);
++			if (!File.Exists(full))
++			{
++				return null;
++			}
++			BitmapImage image = new BitmapImage();
++			image.BeginInit();
++			image.CacheOption = BitmapCacheOption.OnLoad;
++			image.UriSource = new Uri(full, UriKind.Absolute);
++			image.DecodePixelWidth = DecodeWidth;
++			image.EndInit();
++			image.Freeze();
++			return image;
++		}
++		catch
++		{
++			return null;
++		}
++	}
++
++	private void Advance()
++	{
++		_timer.Interval = TimeSpan.FromSeconds(Math.Max(2, Interval));
++		if (_slides.Count < 2 || !IsVisible)
++		{
++			return;
++		}
++		_index = (_index + 1) % _slides.Count;
++		Show(_slides[_index], animate: true);
++	}
++
++	private void Show(Slide slide, bool animate)
++	{
++		Grid layer = new Grid();
++		if (slide.Image != null && slide.Icon)
++		{
++			layer.Background = new SolidColorBrush(Color.FromRgb(0x18, 0x18, 0x18));
++			layer.Children.Add(new Image
++			{
++				Source = slide.Image,
++				Stretch = Stretch.UniformToFill,
++				Opacity = 0.55,
++				Effect = new System.Windows.Media.Effects.BlurEffect
++				{
++					Radius = 36
++				}
++			});
++			layer.Children.Add(new Image
++			{
++				Source = slide.Image,
++				Width = 128,
++				Height = 128,
++				Stretch = Stretch.Uniform,
++				Margin = new Thickness(0, 0, 0, CaptionSize * 2),
++				HorizontalAlignment = HorizontalAlignment.Center,
++				VerticalAlignment = VerticalAlignment.Center,
++				Effect = new System.Windows.Media.Effects.DropShadowEffect
++				{
++					BlurRadius = 16,
++					ShadowDepth = 3,
++					Opacity = 0.6
++				}
++			});
++		}
++		else if (slide.Image != null)
++		{
++			layer.Children.Add(new Image
++			{
++				Source = slide.Image,
++				Stretch = Stretch.UniformToFill,
++				HorizontalAlignment = HorizontalAlignment.Center,
++				VerticalAlignment = VerticalAlignment.Center
++			});
++		}
++		if (!string.IsNullOrEmpty(slide.Title))
++		{
++			bool hasSubtitle = !string.IsNullOrEmpty(slide.Subtitle);
++			layer.Children.Add(new System.Windows.Shapes.Rectangle
++			{
++				Height = CaptionSize * (hasSubtitle ? 3.4 : 2.5),
++				VerticalAlignment = VerticalAlignment.Bottom,
++				Fill = new LinearGradientBrush(Color.FromArgb(0, 0, 0, 0), Color.FromArgb(0xB0, 0, 0, 0), 90)
++			});
++			StackPanel caption = new StackPanel
++			{
++				VerticalAlignment = VerticalAlignment.Bottom,
++				Margin = new Thickness(12, 0, 10, 10)
++			};
++			caption.Children.Add(new TextBlock
++			{
++				Text = slide.Title,
++				Foreground = Brushes.White,
++				FontSize = CaptionSize,
++				TextTrimming = TextTrimming.CharacterEllipsis
++			});
++			if (hasSubtitle)
++			{
++				caption.Children.Add(new TextBlock
++				{
++					Text = slide.Subtitle,
++					Foreground = new SolidColorBrush(Color.FromArgb(0xDF, 0xFF, 0xFF, 0xFF)),
++					FontSize = CaptionSize * 0.78,
++					TextTrimming = TextTrimming.CharacterEllipsis
++				});
++			}
++			layer.Children.Add(caption);
++		}
++		Grid? previous = _front;
++		_front = layer;
++		Children.Add(layer);
++		if (!animate || previous == null || ActualHeight <= 0)
++		{
++			if (previous != null)
++			{
++				Children.Remove(previous);
++			}
++			return;
++		}
++		// The new slide pushes the old one up and out.
++		double height = ActualHeight;
++		CubicEase ease = new CubicEase
++		{
++			EasingMode = EasingMode.EaseInOut
++		};
++		TranslateTransform incoming = new TranslateTransform(0, height);
++		layer.RenderTransform = incoming;
++		TranslateTransform outgoing = new TranslateTransform(0, 0);
++		previous.RenderTransform = outgoing;
++		DoubleAnimation slideOut = new DoubleAnimation(0, -height, TimeSpan.FromMilliseconds(650))
++		{
++			EasingFunction = ease
++		};
++		slideOut.Completed += (_, _) => Children.Remove(previous);
++		outgoing.BeginAnimation(TranslateTransform.YProperty, slideOut);
++		incoming.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(height, 0, TimeSpan.FromMilliseconds(650))
++		{
++			EasingFunction = ease
++		});
++	}
++}
+diff --git a/XboxMetroLauncher/XboxMetroLauncher.Input/DashboardInputRouter.cs b/XboxMetroLauncher/XboxMetroLauncher.Input/DashboardInputRouter.cs
+index 20ba332..b97b11c 100644
+--- a/XboxMetroLauncher/XboxMetroLauncher.Input/DashboardInputRouter.cs
++++ b/XboxMetroLauncher/XboxMetroLauncher.Input/DashboardInputRouter.cs
+@@ -16,6 +16,13 @@ public static class DashboardInputRouter
+ 			return false;
+ 		}
+ 
++		// Ctrl+G opens the Guide, as it does in Xenia while a game runs.
++		if (args.Key == Key.G && (Keyboard.Modifiers & ModifierKeys.Control) != 0)
++		{
++			action = DashboardInputAction.Guide;
++			return true;
++		}
++
+ 		switch (args.Key)
+ 		{
+ 			case Key.Left:
+diff --git a/XboxMetroLauncher/XboxMetroLauncher.Models/AppSettings.cs b/XboxMetroLauncher/XboxMetroLauncher.Models/AppSettings.cs
+index 402ccd4..63b1b4e 100644
+--- a/XboxMetroLauncher/XboxMetroLauncher.Models/AppSettings.cs
++++ b/XboxMetroLauncher/XboxMetroLauncher.Models/AppSettings.cs
+@@ -32,6 +32,32 @@ public sealed class AppSettings : ObservableObject
+ 		set => SetProperty(ref _xboxGuide, value == "Blades" || value == "Blades BETA" ? "Blades" : "Metro", nameof(XboxGuide));
+ 	}
+ 
++	private bool _initialSetupComplete;
++
++	private string _consoleLanguage = string.Empty;
++
++	private string _consoleLocale = string.Empty;
++
++	// Set once the console's first-run setup has been completed.
++	public bool InitialSetupComplete
++	{
++		get => _initialSetupComplete;
++		set => SetProperty(ref _initialSetupComplete, value, nameof(InitialSetupComplete));
++	}
++
++	// Console language chosen in setup; Xbox 360 games use it too.
++	public string ConsoleLanguage
++	{
++		get => _consoleLanguage;
++		set => SetProperty(ref _consoleLanguage, value ?? string.Empty, nameof(ConsoleLanguage));
++	}
++
++	public string ConsoleLocale
++	{
++		get => _consoleLocale;
++		set => SetProperty(ref _consoleLocale, value ?? string.Empty, nameof(ConsoleLocale));
++	}
++
+ 	private string _dashboardSounds = "Metro";
+ 
+ 	private string _dashboardStartup = "Metro";
 diff --git a/XboxMetroLauncher/XboxMetroLauncher.Services/GameLaunchService.cs b/XboxMetroLauncher/XboxMetroLauncher.Services/GameLaunchService.cs
 index 3fc4db7..1f498e0 100644
 --- a/XboxMetroLauncher/XboxMetroLauncher.Services/GameLaunchService.cs
@@ -46,12 +632,407 @@ index 3fc4db7..1f498e0 100644
  		if (string.Equals(game.LaunchType, "Url", StringComparison.OrdinalIgnoreCase))
  		{
  			string url = NormalizeUrl(game.LaunchCommand);
+diff --git a/XboxMetroLauncher/XboxMetroLauncher.Services/WifiService.cs b/XboxMetroLauncher/XboxMetroLauncher.Services/WifiService.cs
+new file mode 100644
+index 0000000..e06a8db
+--- /dev/null
++++ b/XboxMetroLauncher/XboxMetroLauncher.Services/WifiService.cs
+@@ -0,0 +1,389 @@
++using System;
++using System.Collections.Generic;
++using System.Linq;
++using System.Net.Http;
++using System.Net.NetworkInformation;
++using System.Runtime.InteropServices;
++using System.Security;
++using System.Text;
++using System.Threading;
++using System.Threading.Tasks;
++
++namespace XboxMetroLauncher.Services;
++
++public sealed class WifiNetwork
++{
++	public string Ssid { get; init; } = string.Empty;
++
++	public string ProfileName { get; init; } = string.Empty;
++
++	public int SignalQuality { get; init; }
++
++	public bool IsSecured { get; init; }
++
++	public bool IsConnected { get; init; }
++
++	public bool HasProfile { get; init; }
++
++	internal int AuthAlgorithm { get; init; }
++
++	internal int CipherAlgorithm { get; init; }
++}
++
++// The PC's networking, presented the way the console's network setup does:
++// wireless networks come from the Windows WLAN service (the same list as the
++// Windows Wi-Fi flyout) and connecting creates a normal Windows Wi-Fi profile.
++public static class WifiService
++{
++	private const uint ClientVersion = 2;
++
++	private const uint FlagConnected = 1;
++
++	private const uint FlagHasProfile = 2;
++
++	// True when the PC reaches the Internet over a wired adapter.
++	public static bool HasWiredConnection()
++	{
++		try
++		{
++			return NetworkInterface.GetAllNetworkInterfaces().Any(nic =>
++				nic.OperationalStatus == OperationalStatus.Up
++				&& nic.NetworkInterfaceType is NetworkInterfaceType.Ethernet or NetworkInterfaceType.GigabitEthernet
++				&& !nic.Description.Contains("Virtual", StringComparison.OrdinalIgnoreCase)
++				&& !nic.Description.Contains("Hyper-V", StringComparison.OrdinalIgnoreCase)
++				&& nic.GetIPProperties().GatewayAddresses.Count > 0);
++		}
++		catch
++		{
++			return false;
++		}
++	}
++
++	public static bool HasWirelessAdapter()
++	{
++		return WithClient(handle => GetInterfaces(handle).Count > 0, false);
++	}
++
++	// Scans and lists networks, strongest first, one entry per SSID.
++	public static async Task<IReadOnlyList<WifiNetwork>> GetNetworksAsync(CancellationToken cancellationToken = default)
++	{
++		WithClient(handle =>
++		{
++			foreach (Guid guid in GetInterfaces(handle))
++			{
++				Guid interfaceGuid = guid;
++				WlanScan(handle, ref interfaceGuid, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
++			}
++			return true;
++		}, false);
++		// Windows needs a few seconds to finish a scan.
++		await Task.Delay(2500, cancellationToken).ConfigureAwait(false);
++		return WithClient(ListNetworks, (IReadOnlyList<WifiNetwork>)Array.Empty<WifiNetwork>());
++	}
++
++	public static WifiNetwork? GetConnectedNetwork()
++	{
++		return WithClient(ListNetworks, (IReadOnlyList<WifiNetwork>)Array.Empty<WifiNetwork>()).FirstOrDefault(n => n.IsConnected);
++	}
++
++	// Connects to a network. A password is needed only for secured networks
++	// without a saved Windows profile. Returns true once Windows reports the
++	// connection.
++	public static async Task<bool> ConnectAsync(WifiNetwork network, string? password, CancellationToken cancellationToken = default)
++	{
++		bool requested = WithClient(handle =>
++		{
++			List<Guid> interfaces = GetInterfaces(handle);
++			if (interfaces.Count == 0)
++			{
++				return false;
++			}
++			Guid interfaceGuid = interfaces[0];
++			string profileName = network.ProfileName;
++			if (!network.HasProfile || !string.IsNullOrEmpty(password))
++			{
++				string xml = BuildProfileXml(network, password);
++				if (WlanSetProfile(handle, ref interfaceGuid, 0, xml, null, true, IntPtr.Zero, out _) != 0)
++				{
++					return false;
++				}
++				profileName = network.Ssid;
++			}
++			WlanConnectionParameters parameters = new WlanConnectionParameters
++			{
++				ConnectionMode = 0,
++				Profile = profileName,
++				BssType = 1
++			};
++			return WlanConnect(handle, ref interfaceGuid, ref parameters, IntPtr.Zero) == 0;
++		}, false);
++		if (!requested)
++		{
++			return false;
++		}
++		DateTime deadline = DateTime.UtcNow.AddSeconds(20);
++		while (DateTime.UtcNow < deadline)
++		{
++			await Task.Delay(750, cancellationToken).ConfigureAwait(false);
++			WifiNetwork? connected = GetConnectedNetwork();
++			if (connected != null && string.Equals(connected.Ssid, network.Ssid, StringComparison.Ordinal))
++			{
++				return true;
++			}
++		}
++		return false;
++	}
++
++	// Checks Internet access the same way Windows does.
++	public static async Task<bool> TestInternetAsync(CancellationToken cancellationToken = default)
++	{
++		try
++		{
++			using HttpClient client = new HttpClient
++			{
++				Timeout = TimeSpan.FromSeconds(8)
++			};
++			string text = await client.GetStringAsync("http://www.msftconnecttest.com/connecttest.txt", cancellationToken).ConfigureAwait(false);
++			return text.StartsWith("Microsoft Connect Test", StringComparison.Ordinal);
++		}
++		catch
++		{
++			return false;
++		}
++	}
++
++	public static bool IsNetworkAvailable()
++	{
++		try
++		{
++			return NetworkInterface.GetIsNetworkAvailable();
++		}
++		catch
++		{
++			return false;
++		}
++	}
++
++	private static string BuildProfileXml(WifiNetwork network, string? password)
++	{
++		string ssid = SecurityElement.Escape(network.Ssid) ?? string.Empty;
++		string hex = Convert.ToHexString(Encoding.UTF8.GetBytes(network.Ssid));
++		string security;
++		if (!network.IsSecured)
++		{
++			security = "<authEncryption><authentication>open</authentication><encryption>none</encryption><useOneX>false</useOneX></authEncryption>";
++		}
++		else
++		{
++			string authentication = network.AuthAlgorithm switch
++			{
++				9 => "WPA3SAE",
++				4 => "WPAPSK",
++				1 or 2 => "open",
++				_ => "WPA2PSK"
++			};
++			string encryption = network.CipherAlgorithm switch
++			{
++				2 => "TKIP",
++				1 or 5 or 0x101 => "WEP",
++				_ => "AES"
++			};
++			string keyType = encryption == "WEP" ? "networkKey" : "passPhrase";
++			security = $"<authEncryption><authentication>{authentication}</authentication><encryption>{encryption}</encryption><useOneX>false</useOneX></authEncryption>"
++				+ $"<sharedKey><keyType>{keyType}</keyType><protected>false</protected><keyMaterial>{SecurityElement.Escape(password ?? string.Empty)}</keyMaterial></sharedKey>";
++		}
++		return "<?xml version=\"1.0\"?>"
++			+ "<WLANProfile xmlns=\"http://www.microsoft.com/networking/WLAN/profile/v1\">"
++			+ $"<name>{ssid}</name>"
++			+ $"<SSIDConfig><SSID><hex>{hex}</hex><name>{ssid}</name></SSID></SSIDConfig>"
++			+ "<connectionType>ESS</connectionType><connectionMode>auto</connectionMode>"
++			+ $"<MSM><security>{security}</security></MSM>"
++			+ "</WLANProfile>";
++	}
++
++	private static T WithClient<T>(Func<nint, T> action, T fallback)
++	{
++		nint handle = IntPtr.Zero;
++		try
++		{
++			if (WlanOpenHandle(ClientVersion, IntPtr.Zero, out _, out handle) != 0)
++			{
++				return fallback;
++			}
++			return action(handle);
++		}
++		catch (Exception exception) when (exception is DllNotFoundException or EntryPointNotFoundException)
++		{
++			return fallback;
++		}
++		finally
++		{
++			if (handle != IntPtr.Zero)
++			{
++				WlanCloseHandle(handle, IntPtr.Zero);
++			}
++		}
++	}
++
++	private static List<Guid> GetInterfaces(nint handle)
++	{
++		List<Guid> result = new List<Guid>();
++		if (WlanEnumInterfaces(handle, IntPtr.Zero, out nint list) != 0)
++		{
++			return result;
++		}
++		try
++		{
++			int count = Marshal.ReadInt32(list);
++			// WLAN_INTERFACE_INFO: GUID (16) + WCHAR[256] (512) + state (4).
++			const int itemSize = 16 + 512 + 4;
++			for (int i = 0; i < count; i++)
++			{
++				nint item = list + 8 + i * itemSize;
++				result.Add(Marshal.PtrToStructure<Guid>(item));
++			}
++		}
++		finally
++		{
++			WlanFreeMemory(list);
++		}
++		return result;
++	}
++
++	private static IReadOnlyList<WifiNetwork> ListNetworks(nint handle)
++	{
++		Dictionary<string, WifiNetwork> bySsid = new Dictionary<string, WifiNetwork>(StringComparer.Ordinal);
++		foreach (Guid guid in GetInterfaces(handle))
++		{
++			Guid interfaceGuid = guid;
++			if (WlanGetAvailableNetworkList(handle, ref interfaceGuid, 0, IntPtr.Zero, out nint list) != 0)
++			{
++				continue;
++			}
++			try
++			{
++				int count = Marshal.ReadInt32(list);
++				int itemSize = Marshal.SizeOf<WlanAvailableNetwork>();
++				for (int i = 0; i < count; i++)
++				{
++					WlanAvailableNetwork item = Marshal.PtrToStructure<WlanAvailableNetwork>(list + 8 + i * itemSize);
++					int length = (int)Math.Min(item.SsidLength, 32u);
++					string ssid = Encoding.UTF8.GetString(item.Ssid, 0, length);
++					if (string.IsNullOrWhiteSpace(ssid) || item.BssType != 1)
++					{
++						continue;
++					}
++					WifiNetwork network = new WifiNetwork
++					{
++						Ssid = ssid,
++						ProfileName = item.ProfileName ?? string.Empty,
++						SignalQuality = (int)item.SignalQuality,
++						IsSecured = item.SecurityEnabled,
++						IsConnected = (item.Flags & FlagConnected) != 0,
++						HasProfile = (item.Flags & FlagHasProfile) != 0,
++						AuthAlgorithm = item.AuthAlgorithm,
++						CipherAlgorithm = item.CipherAlgorithm
++					};
++					if (!bySsid.TryGetValue(ssid, out WifiNetwork? existing)
++						|| (network.IsConnected && !existing.IsConnected)
++						|| (network.HasProfile && !existing.HasProfile && !existing.IsConnected)
++						|| (network.SignalQuality > existing.SignalQuality && !existing.IsConnected && existing.HasProfile == network.HasProfile))
++					{
++						bySsid[ssid] = network;
++					}
++				}
++			}
++			finally
++			{
++				WlanFreeMemory(list);
++			}
++		}
++		return bySsid.Values
++			.OrderByDescending(n => n.IsConnected)
++			.ThenByDescending(n => n.SignalQuality)
++			.ToList();
++	}
++
++	[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
++	private struct WlanAvailableNetwork
++	{
++		[MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)]
++		public string ProfileName;
++
++		public uint SsidLength;
++
++		[MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)]
++		public byte[] Ssid;
++
++		public int BssType;
++
++		public uint NumberOfBssids;
++
++		[MarshalAs(UnmanagedType.Bool)]
++		public bool NetworkConnectable;
++
++		public uint NotConnectableReason;
++
++		public uint NumberOfPhyTypes;
++
++		[MarshalAs(UnmanagedType.ByValArray, SizeConst = 8)]
++		public int[] PhyTypes;
++
++		[MarshalAs(UnmanagedType.Bool)]
++		public bool MorePhyTypes;
++
++		public uint SignalQuality;
++
++		[MarshalAs(UnmanagedType.Bool)]
++		public bool SecurityEnabled;
++
++		public int AuthAlgorithm;
++
++		public int CipherAlgorithm;
++
++		public uint Flags;
++
++		public uint Reserved;
++	}
++
++	[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
++	private struct WlanConnectionParameters
++	{
++		public int ConnectionMode;
++
++		[MarshalAs(UnmanagedType.LPWStr)]
++		public string Profile;
++
++		public nint Ssid;
++
++		public nint DesiredBssidList;
++
++		public int BssType;
++
++		public uint Flags;
++	}
++
++	[DllImport("wlanapi.dll")]
++	private static extern uint WlanOpenHandle(uint clientVersion, nint reserved, out uint negotiatedVersion, out nint clientHandle);
++
++	[DllImport("wlanapi.dll")]
++	private static extern uint WlanCloseHandle(nint clientHandle, nint reserved);
++
++	[DllImport("wlanapi.dll")]
++	private static extern uint WlanEnumInterfaces(nint clientHandle, nint reserved, out nint interfaceList);
++
++	[DllImport("wlanapi.dll")]
++	private static extern uint WlanScan(nint clientHandle, ref Guid interfaceGuid, nint ssid, nint ieData, nint reserved);
++
++	[DllImport("wlanapi.dll")]
++	private static extern uint WlanGetAvailableNetworkList(nint clientHandle, ref Guid interfaceGuid, uint flags, nint reserved, out nint availableNetworkList);
++
++	[DllImport("wlanapi.dll", CharSet = CharSet.Unicode)]
++	private static extern uint WlanSetProfile(nint clientHandle, ref Guid interfaceGuid, uint flags, string profileXml, string? allUserProfileSecurity, [MarshalAs(UnmanagedType.Bool)] bool overwrite, nint reserved, out uint reasonCode);
++
++	[DllImport("wlanapi.dll")]
++	private static extern uint WlanConnect(nint clientHandle, ref Guid interfaceGuid, ref WlanConnectionParameters connectionParameters, nint reserved);
++
++	[DllImport("wlanapi.dll")]
++	private static extern void WlanFreeMemory(nint memory);
++}
 diff --git a/XboxMetroLauncher/XboxMetroLauncher.Services/XeniaIntegration.cs b/XboxMetroLauncher/XboxMetroLauncher.Services/XeniaIntegration.cs
 new file mode 100644
-index 0000000..f38cd93
+index 0000000..d888223
 --- /dev/null
 +++ b/XboxMetroLauncher/XboxMetroLauncher.Services/XeniaIntegration.cs
-@@ -0,0 +1,270 @@
+@@ -0,0 +1,428 @@
 +using System;
 +using System.Collections.Generic;
 +using System.Diagnostics;
@@ -59,10 +1040,40 @@ index 0000000..f38cd93
 +using System.Linq;
 +using System.Text.Json;
 +using System.Threading.Tasks;
++using System.Windows;
++using System.Windows.Media;
++using System.Windows.Media.Imaging;
 +using XboxMetroLauncher.Models;
 +using XboxMetroLauncher.Utilities;
 +
 +namespace XboxMetroLauncher.Services;
++
++// Summary of the signed-in Xenia profile, written by Xenia while games run.
++public sealed class XeniaProfileStatus
++{
++	public string Gamertag { get; set; } = string.Empty;
++
++	public int Gamerscore { get; set; }
++
++	public int Achievements { get; set; }
++
++	public List<XeniaTitleStatus> Titles { get; set; } = new List<XeniaTitleStatus>();
++}
++
++public sealed class XeniaTitleStatus
++{
++	public string TitleId { get; set; } = string.Empty;
++
++	public string Name { get; set; } = string.Empty;
++
++	public int Unlocked { get; set; }
++
++	public int Total { get; set; }
++
++	public int Gamerscore { get; set; }
++
++	public int MaxGamerscore { get; set; }
++}
 +
 +// Bridges DashX360 and the Xenia Xbox 360 emulator. Xenia starts DashX360 as
 +// its home screen and passes, through the environment:
@@ -81,6 +1092,13 @@ index 0000000..f38cd93
 +
 +	// While a Xenia game runs, Xenia owns the Guide button.
 +	public static bool IsXeniaGameRunning => _isXeniaGameRunning;
++
++	// The signed-in dashboard profile and settings, passed to Xenia so games
++	// run signed in as the same profile, in the console's language.
++	public static Func<(Profile Profile, AppSettings Settings)>? SessionProvider { get; set; }
++
++	// Raised on the UI thread when a game started through Xenia has closed.
++	public static event Action? GameExited;
 +
 +	public static bool IsXeniaGame(GameMetadata? game)
 +	{
@@ -128,6 +1146,37 @@ index 0000000..f38cd93
 +		}
 +	}
 +
++	public static string? ProfileJsonPath
++	{
++		get
++		{
++			string? library = LibraryJsonPath;
++			return library == null ? null : Path.Combine(Path.GetDirectoryName(library) ?? string.Empty, "profile.json");
++		}
++	}
++
++	public static XeniaProfileStatus? ReadProfileStatus()
++	{
++		string? path = ProfileJsonPath;
++		if (path == null || !File.Exists(path))
++		{
++			return null;
++		}
++		try
++		{
++			return JsonSerializer.Deserialize<XeniaProfileStatus>(File.ReadAllText(path), new JsonSerializerOptions
++			{
++				PropertyNameCaseInsensitive = true,
++				AllowTrailingCommas = true
++			});
++		}
++		catch (Exception ex)
++		{
++			App.LogException(ex, "XeniaIntegration.ReadProfileStatus");
++			return null;
++		}
++	}
++
 +	private sealed class XeniaGame
 +	{
 +		public string Title { get; set; } = string.Empty;
@@ -143,6 +1192,33 @@ index 0000000..f38cd93
 +	private sealed class XeniaLibraryFile
 +	{
 +		public List<XeniaGame> Games { get; set; } = new List<XeniaGame>();
++	}
++
++	// Titles and art of the Xbox 360 games Xenia found. IsIcon is set when
++	// only the game's small icon is available.
++	public static IReadOnlyList<(string Title, string CoverPath, bool IsIcon)> GetLibraryArt()
++	{
++		string? path = LibraryJsonPath;
++		if (path == null || !File.Exists(path))
++		{
++			return Array.Empty<(string, string, bool)>();
++		}
++		try
++		{
++			XeniaLibraryFile? file = JsonSerializer.Deserialize<XeniaLibraryFile>(File.ReadAllText(path), new JsonSerializerOptions
++			{
++				PropertyNameCaseInsensitive = true,
++				AllowTrailingCommas = true
++			});
++			return (file?.Games ?? new List<XeniaGame>())
++				.Select((XeniaGame g) => (g.Title, string.IsNullOrWhiteSpace(g.CoverPath) ? g.IconPath : g.CoverPath, string.IsNullOrWhiteSpace(g.CoverPath)))
++				.Where(((string Title, string CoverPath, bool IsIcon) g) => !string.IsNullOrWhiteSpace(g.CoverPath) && File.Exists(g.CoverPath))
++				.ToList();
++		}
++		catch
++		{
++			return Array.Empty<(string, string, bool)>();
++		}
 +	}
 +
 +	// Merges Xenia's exported library into the DashX360 library. Returns true
@@ -174,6 +1250,7 @@ index 0000000..f38cd93
 +			return false;
 +		}
 +
++		XeniaProfileStatus? status = ReadProfileStatus();
 +		bool changed = false;
 +		HashSet<string> present = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 +		foreach (XeniaGame xg in file.Games)
@@ -198,6 +1275,11 @@ index 0000000..f38cd93
 +			}
 +			string cover = !string.IsNullOrWhiteSpace(xg.CoverPath) ? xg.CoverPath : xg.IconPath;
 +			string description = xg.Achievements > 0 ? $"Xbox 360 · {xg.Source} · {xg.Achievements} achievements, {xg.Gamerscore} gamerscore" : $"Xbox 360 · {xg.Source}";
++			XeniaTitleStatus? progress = status?.Titles.FirstOrDefault((XeniaTitleStatus t) => string.Equals(t.TitleId, xg.TitleId, StringComparison.OrdinalIgnoreCase));
++			if (progress != null && progress.Total > 0)
++			{
++				description = $"Xbox 360 · {xg.Source} · {progress.Unlocked} of {progress.Total} achievements, {progress.Gamerscore} of {progress.MaxGamerscore} gamerscore";
++			}
 +			// Keep user edits to the title/cover; only fill what's missing or
 +			// still Xenia-provided.
 +			if (string.IsNullOrWhiteSpace(game.Title))
@@ -243,6 +1325,17 @@ index 0000000..f38cd93
 +			UseShellExecute = false
 +		};
 +		info.Environment["XENIA_DASHBOARD_SHELL"] = "1";
++		if (SessionProvider?.Invoke() is var (profile, settings))
++		{
++			info.Environment["XENIA_DASHBOARD_GAMERTAG"] = profile.Gamertag;
++			info.Environment["XENIA_DASHBOARD_GUIDE_STYLE"] = settings.XboxGuide == "Blades" ? "blades" : "metro";
++			info.Environment["XENIA_DASHBOARD_LANGUAGE"] = Views.SetupScreens.LanguageCode(settings.ConsoleLanguage).ToString(System.Globalization.CultureInfo.InvariantCulture);
++			string? picture = WriteGamerPicture(profile.GamerPicturePath);
++			if (picture != null)
++			{
++				info.Environment["XENIA_DASHBOARD_GAMERPIC"] = picture;
++			}
++		}
 +		Process? process = Process.Start(info);
 +		if (process != null)
 +		{
@@ -252,6 +1345,10 @@ index 0000000..f38cd93
 +			{
 +				_isXeniaGameRunning = false;
 +				RestoreDashboardWindow();
++				System.Windows.Application.Current?.Dispatcher.BeginInvoke((Action)delegate
++				{
++					GameExited?.Invoke();
++				});
 +			};
 +		}
 +		return process;
@@ -307,6 +1404,48 @@ index 0000000..f38cd93
 +		return true;
 +	}
 +
++	// Xenia profiles use a 64x64 PNG gamer picture.
++	private static string? WriteGamerPicture(string picturePath)
++	{
++		try
++		{
++			string full = Path.IsPathRooted(picturePath) ? picturePath : AppPaths.FindFile(picturePath);
++			if (!File.Exists(full))
++			{
++				return null;
++			}
++			BitmapImage source = new BitmapImage();
++			source.BeginInit();
++			source.CacheOption = BitmapCacheOption.OnLoad;
++			source.UriSource = new Uri(full, UriKind.Absolute);
++			source.DecodePixelWidth = 128;
++			source.EndInit();
++			double scale = 64.0 / Math.Min(source.Width, source.Height);
++			double width = source.Width * scale;
++			double height = source.Height * scale;
++			DrawingVisual visual = new DrawingVisual();
++			using (DrawingContext context = visual.RenderOpen())
++			{
++				context.DrawImage(source, new Rect((64 - width) / 2, (64 - height) / 2, width, height));
++			}
++			RenderTargetBitmap target = new RenderTargetBitmap(64, 64, 96, 96, PixelFormats.Pbgra32);
++			target.Render(visual);
++			PngBitmapEncoder encoder = new PngBitmapEncoder();
++			encoder.Frames.Add(BitmapFrame.Create(target));
++			string output = Path.Combine(AppPaths.UserDataFolder, "xenia-gamerpic.png");
++			using (FileStream stream = File.Create(output))
++			{
++				encoder.Save(stream);
++			}
++			return output;
++		}
++		catch (Exception ex)
++		{
++			App.LogException(ex, "XeniaIntegration.WriteGamerPicture");
++			return null;
++		}
++	}
++
 +	private static bool IsXeniaCachePath(string path)
 +	{
 +		return path.Contains(Path.Combine("cache_host", "dashboard"), StringComparison.OrdinalIgnoreCase);
@@ -323,10 +1462,18 @@ index 0000000..f38cd93
 +	}
 +}
 diff --git a/XboxMetroLauncher/XboxMetroLauncher.ViewModels/DashboardViewModel.cs b/XboxMetroLauncher/XboxMetroLauncher.ViewModels/DashboardViewModel.cs
-index e8a9bef..4764f0d 100644
+index e8a9bef..f9d087f 100644
 --- a/XboxMetroLauncher/XboxMetroLauncher.ViewModels/DashboardViewModel.cs
 +++ b/XboxMetroLauncher/XboxMetroLauncher.ViewModels/DashboardViewModel.cs
-@@ -2632,6 +2632,8 @@ public sealed class DashboardViewModel : ObservableObject
+@@ -1042,6 +1042,7 @@ public sealed class DashboardViewModel : ObservableObject
+ 					_profile.PropertyChanged += Profile_OnPropertyChanged;
+ 				}
+ 				RefreshEditableProfileFields();
++				OnPropertyChanged("TopRightGamerscoreText");
+ 			}
+ 		}
+ 	}
+@@ -2632,6 +2633,8 @@ public sealed class DashboardViewModel : ObservableObject
  
  	public ICommand ScanSteamGamesCommand { get; }
  
@@ -335,7 +1482,19 @@ index e8a9bef..4764f0d 100644
  	public ICommand OpenSteamSetupCommand { get; }
  
  	public ICommand CloseSteamSetupCommand { get; }
-@@ -2977,6 +2979,7 @@ public sealed class DashboardViewModel : ObservableObject
+@@ -2797,6 +2800,11 @@ public sealed class DashboardViewModel : ObservableObject
+ 
+ 	public event EventHandler<DashboardToastRequest>? ToastRequested;
+ 
++	// Settings > System opens the console's System Settings.
++	public event Action? SystemSettingsRequested;
++
++	public ICommand OpenSystemSettingsCommand { get; }
++
+ 	[DllImport("user32.dll")]
+ 	[return: MarshalAs(UnmanagedType.Bool)]
+ 	private static extern bool SetForegroundWindow(nint hWnd);
+@@ -2977,6 +2985,7 @@ public sealed class DashboardViewModel : ObservableObject
  		ExportDataCommand = new AsyncRelayCommand(ExportDataAsync);
  		ImportDataCommand = new AsyncRelayCommand(ImportDataAsync);
  		ScanSteamGamesCommand = new AsyncRelayCommand(ScanSteamGamesAsync);
@@ -343,7 +1502,17 @@ index e8a9bef..4764f0d 100644
  		OpenSteamSetupCommand = new AsyncRelayCommand(OpenSteamSetupAsync);
  		CloseSteamSetupCommand = new RelayCommand((Action)delegate
  		{
-@@ -3233,6 +3236,10 @@ public sealed class DashboardViewModel : ObservableObject
+@@ -3093,6 +3102,9 @@ public sealed class DashboardViewModel : ObservableObject
+ 		OpenMyPinsCommand = new RelayCommand(OpenMyPins);
+ 		CloseMyGamesCommand = new RelayCommand((Action)(() => CloseLibraryMenu(playSound: true)));
+ 		OpenLauncherSettingsCommand = new RelayCommand(OpenLauncherSettings);
++		OpenSystemSettingsCommand = new RelayCommand(() => SystemSettingsRequested?.Invoke());
++		XeniaIntegration.SessionProvider = () => (Profile, Settings);
++		XeniaIntegration.GameExited += () => _ = ApplyXeniaProfileAsync();
+ 		CloseLauncherSettingsCommand = new RelayCommand((Action)(() => CloseLauncherSettings(playSound: true)));
+ 		ChooseSelectedHomeImageCommand = new AsyncRelayCommand(ChooseSelectedHomeImageAsync);
+ 		ChooseSelectedGameMenuImageCommand = new AsyncRelayCommand(ChooseSelectedGameMenuImageAsync);
+@@ -3233,6 +3245,14 @@ public sealed class DashboardViewModel : ObservableObject
  		Settings.DiscordGrantedScopes = string.Empty;
  		Settings.DiscordTokenType = string.Empty;
  		_library = await _libraryService.LoadAsync();
@@ -351,10 +1520,14 @@ index e8a9bef..4764f0d 100644
 +		{
 +			await _libraryService.SaveAsync(_library);
 +		}
++		if (ApplyXeniaProfileStatus())
++		{
++			await SaveProfileSilentlyAsync();
++		}
  		foreach (GameMetadata game in _library.Games)
  		{
  			GameMetadata gameMetadata = game;
-@@ -5732,7 +5739,9 @@ public sealed class DashboardViewModel : ObservableObject
+@@ -5732,7 +5752,9 @@ public sealed class DashboardViewModel : ObservableObject
  		{
  			SelectedGame = card;
  			_runningGameService.BeginLaunch(card.Game, DateTimeOffset.UtcNow);
@@ -365,10 +1538,75 @@ index e8a9bef..4764f0d 100644
  			{
  				Window window = System.Windows.Application.Current?.MainWindow;
  				if (window != null)
-@@ -8019,6 +8028,35 @@ public sealed class DashboardViewModel : ObservableObject
+@@ -8019,6 +8041,100 @@ public sealed class DashboardViewModel : ObservableObject
  		}
  	}
  
++	public async Task SaveSettingsAndProfileAsync()
++	{
++		await _settingsService.SaveAsync(Settings);
++		await _profileService.SaveAsync(Profile);
++	}
++
++	// The profile created at the end of the console's initial setup.
++	public async Task CompleteInitialSetupAsync(string gamertag, string gamerPicturePath, bool joinedXboxLive)
++	{
++		Settings.InitialSetupComplete = true;
++		if (!string.Equals(Profile.Gamertag, gamertag, StringComparison.OrdinalIgnoreCase))
++		{
++			Profile.Gamerscore = 0;
++		}
++		Profile.Gamertag = gamertag;
++		Profile.GamerPicturePath = gamerPicturePath;
++		Profile.OnlineStatus = joinedXboxLive ? "Online" : "Offline";
++		if (!string.IsNullOrWhiteSpace(Settings.ConsoleLocale) && Settings.ConsoleLocale != "Other")
++		{
++			Profile.Location = Settings.ConsoleLocale;
++		}
++		ApplyXeniaProfileStatus();
++		await SaveSettingsAndProfileAsync();
++		DashboardTabViewModel? social = Tabs.FirstOrDefault((DashboardTabViewModel tab) => tab.Key == "social");
++		if (social != null)
++		{
++			CurrentTab = social;
++		}
++	}
++
++	// Gamerscore comes from the Xenia profile with the same gamertag, which
++	// earns achievements while Xbox 360 games run.
++	private bool ApplyXeniaProfileStatus()
++	{
++		XeniaProfileStatus? status = XeniaIntegration.ReadProfileStatus();
++		if (status == null || !string.Equals(status.Gamertag, Profile.Gamertag, StringComparison.OrdinalIgnoreCase) || Profile.Gamerscore == status.Gamerscore)
++		{
++			return false;
++		}
++		Profile.Gamerscore = status.Gamerscore;
++		return true;
++	}
++
++	private async Task ApplyXeniaProfileAsync()
++	{
++		try
++		{
++			bool profileChanged = ApplyXeniaProfileStatus();
++			if (XeniaIntegration.MergeInto(_library))
++			{
++				SyncGamesCollectionFromLibrary();
++				RefreshDerivedLists();
++				await PersistLibraryAsync();
++			}
++			if (profileChanged)
++			{
++				await SaveProfileSilentlyAsync();
++			}
++		}
++		catch (Exception ex)
++		{
++			App.LogException(ex, "DashboardViewModel.ApplyXeniaProfileAsync");
++		}
++	}
++
 +	private async Task ScanXbox360GamesAsync()
 +	{
 +		try
@@ -401,6 +1639,16 @@ index e8a9bef..4764f0d 100644
  	private async Task ScanSteamGamesAsync()
  	{
  		_ = 1;
+@@ -8289,6 +8405,9 @@ public sealed class DashboardViewModel : ObservableObject
+ 			OpenMyApps();
+ 			break;
+ 		case "music.player":
++		case "music.feature":
++		case "music.recent":
++		case "music.library":
+ 			OpenMusicPlayer();
+ 			break;
+ 		case "music.search":
 diff --git a/XboxMetroLauncher/XboxMetroLauncher.ViewModels/GameCardViewModel.cs b/XboxMetroLauncher/XboxMetroLauncher.ViewModels/GameCardViewModel.cs
 index b46dd60..863b5e9 100644
 --- a/XboxMetroLauncher/XboxMetroLauncher.ViewModels/GameCardViewModel.cs
@@ -435,3 +1683,3591 @@ index b46dd60..863b5e9 100644
  			if (!IsSteamGame)
  			{
  				return "Manual";
+diff --git a/XboxMetroLauncher/XboxMetroLauncher.Views/X360SetupScreens.cs b/XboxMetroLauncher/XboxMetroLauncher.Views/X360SetupScreens.cs
+new file mode 100644
+index 0000000..ccb1a7b
+--- /dev/null
++++ b/XboxMetroLauncher/XboxMetroLauncher.Views/X360SetupScreens.cs
+@@ -0,0 +1,1685 @@
++using System;
++using System.Collections.Generic;
++using System.Globalization;
++using System.IO;
++using System.Linq;
++using System.Text.RegularExpressions;
++using System.Threading;
++using System.Threading.Tasks;
++using System.Windows;
++using System.Windows.Controls;
++using System.Windows.Input;
++using System.Windows.Media;
++using System.Windows.Media.Animation;
++using System.Windows.Media.Effects;
++using System.Windows.Shapes;
++using System.Windows.Threading;
++using XboxMetroLauncher.Input;
++using XboxMetroLauncher.Services;
++using XboxMetroLauncher.Utilities;
++
++namespace XboxMetroLauncher.Views;
++
++// Choices made during one run of the initial setup.
++internal sealed class SetupState
++{
++	public string Gamertag = "Player1";
++
++	public string GamerPicturePath = System.IO.Path.Combine("Assets", "Profile", "profilepicture.jpg");
++}
++
++internal static class SetupScreens
++{
++	// Console languages, with the Xbox 360 XC_LANGUAGE code games read
++	// (1 = English for languages the console doesn't define).
++	public static readonly (string Name, string Culture, int Code)[] Languages =
++	{
++		("English", "en", 1), ("Deutsch", "de", 3), ("Español", "es", 5), ("Français", "fr", 4),
++		("Italiano", "it", 6), ("Magyar", "hu", 1), ("Nederlands", "nl", 16), ("Norsk", "nb", 15),
++		("Polski", "pl", 11), ("Português", "pt", 9), ("Русский", "ru", 12), ("Suomi", "fi", 1),
++		("Svenska", "sv", 13), ("Türkçe", "tr", 14), ("Čeština", "cs", 1), ("Dansk", "da", 1),
++		("Ελληνικά", "el", 1), ("日本語", "ja", 2), ("한국어", "ko", 7), ("中文(简体)", "zh-Hans", 17),
++		("中文(繁體)", "zh-Hant", 8)
++	};
++
++	public static readonly string[] Locales =
++	{
++		"Argentina", "Australia", "Austria", "Belgium", "Brazil", "Canada", "Chile", "Colombia",
++		"Czech Republic", "Denmark", "Finland", "France", "Germany", "Greece", "Hong Kong", "Hungary",
++		"India", "Ireland", "Israel", "Italy", "Japan", "Korea", "Mexico", "Netherlands", "New Zealand",
++		"Norway", "Poland", "Portugal", "Russia", "Saudi Arabia", "Singapore", "Slovakia", "South Africa",
++		"Spain", "Sweden", "Switzerland", "Taiwan", "Turkey", "United Arab Emirates", "United Kingdom",
++		"United States", "Other"
++	};
++
++	public static int LanguageCode(string? name)
++	{
++		return Languages.FirstOrDefault(l => l.Name == name).Code is int code && code > 0 ? code : 1;
++	}
++
++	private static int DefaultLanguage(X360SystemHost host)
++	{
++		int saved = Array.FindIndex(Languages, l => l.Name == host.Settings.ConsoleLanguage);
++		if (saved >= 0)
++		{
++			return saved;
++		}
++		string culture = CultureInfo.CurrentUICulture.Name;
++		int match = Array.FindIndex(Languages, l => culture.StartsWith(l.Culture, StringComparison.OrdinalIgnoreCase));
++		return Math.Max(0, match);
++	}
++
++	private static int DefaultLocale(X360SystemHost host)
++	{
++		int saved = Array.IndexOf(Locales, host.Settings.ConsoleLocale);
++		if (saved >= 0)
++		{
++			return saved;
++		}
++		try
++		{
++			int match = Array.IndexOf(Locales, RegionInfo.CurrentRegion.EnglishName);
++			return match >= 0 ? match : Locales.Length - 1;
++		}
++		catch
++		{
++			return Array.IndexOf(Locales, "United States");
++		}
++	}
++
++	public static X360Screen Language(SetupState? state = null)
++	{
++		state ??= new SetupState();
++		return new ListScreen("Hello", Languages.Select(l => l.Name), 0)
++		{
++			Tab = 0,
++			AllowBack = false,
++			InitialIndex = DefaultLanguage,
++			Selected = (overlay, index) =>
++			{
++				overlay.Host.Settings.ConsoleLanguage = Languages[index].Name;
++				overlay.Navigate(Locale(state));
++			}
++		};
++	}
++
++	private static X360Screen Locale(SetupState state)
++	{
++		return new ListScreen("Select your locale", Locales, 0)
++		{
++			Tab = 1,
++			InitialIndex = DefaultLocale,
++			Selected = (overlay, index) =>
++			{
++				overlay.Host.Settings.ConsoleLocale = Locales[index];
++				overlay.Navigate(ContentControls(state));
++			}
++		};
++	}
++
++	private static X360Screen ContentControls(SetupState state)
++	{
++		const string body = "Content controls help you decide what games and entertainment your family can access based on content ratings, and allows you to place time limits on console use.";
++		return new TilesScreen("Want content controls?", body, new (string, string?, Action<X360SystemOverlay>)[]
++		{
++			("No", X360Ui.TileCross, overlay => overlay.Navigate(new NetworkScreen(state))),
++			("Yes", X360Ui.TileCheck, overlay => overlay.Navigate(new NetworkScreen(state)))
++		}, 2);
++	}
++
++	// After the network step.
++	public static void ApplySettings(X360SystemOverlay overlay, SetupState state)
++	{
++		overlay.Replace(new BusyScreen("applying settings", host => host.SaveAsync(), o => o.Replace(Thanks(state))));
++	}
++
++	private static X360Screen Thanks(SetupState state)
++	{
++		const string body = "**Sign up** for your free Xbox LIVE account now\nso you can:\n\n- keep your games fresh with new add-ons\n- rent or buy movies and TV shows with Xbox Video\n- use your voice with Kinect to find movies, games, and more";
++		return new TilesScreen("Thanks for choosing Xbox 360", body, new (string, string?, Action<X360SystemOverlay>)[]
++		{
++			("Continue", X360Ui.TileArrow, overlay => overlay.Navigate(ProfileName(state)))
++		}, -1)
++		{
++			ScreenStyle = ScreenStyle.OobeLive,
++			TileSize = 167,
++			TileOrigin = new Point(995, 216),
++			BoldTitle = true,
++			AllowBack = false
++		};
++	}
++
++	private static readonly Regex GamertagPattern = new Regex("^[A-Za-z][A-Za-z0-9]*( [A-Za-z0-9]+)*$");
++
++	private static X360Screen ProfileName(SetupState state)
++	{
++		return new KeyboardScreen("Enter Profile Name", "Enter a profile name. Your profile name can contain up to 15 characters.", state.Gamertag, 15)
++		{
++			Validate = text => GamertagPattern.IsMatch(text) ? null : "Profile names start with a letter and can only contain letters, numbers and single spaces.",
++			Done = (overlay, text) =>
++			{
++				state.Gamertag = text;
++				overlay.Navigate(new SaveProfileScreen(state));
++			}
++		};
++	}
++
++	public static void Finish(X360SystemOverlay overlay, SetupState state, bool joinedLive)
++	{
++		overlay.Close(new X360SetupResult
++		{
++			Gamertag = state.Gamertag,
++			GamerPicturePath = state.GamerPicturePath,
++			JoinedXboxLive = joinedLive
++		});
++	}
++}
++
++// Wireless network selection, backed by the PC's Wi-Fi.
++internal sealed class NetworkScreen : ListScreen
++{
++	private readonly SetupState? _state;
++
++	private readonly List<WifiNetwork?> _networks = new List<WifiNetwork?>();
++
++	private readonly Canvas _side = new Canvas();
++
++	private FrameworkElement? _searching;
++
++	private int _tileIndex;
++
++	private bool _loaded;
++
++	// state is null when opened from System Settings.
++	public NetworkScreen(SetupState? state)
++		: base("Select a wireless network", Array.Empty<string>(), 0)
++	{
++		_state = state;
++		Tab = state != null ? 3 : -1;
++		TextX = 222;
++		BarX = 192;
++		BarWidth = 458;
++	}
++
++	public override int SetupTab => _state != null ? 3 : -1;
++
++	protected override void BuildExtras()
++	{
++		Root.Children.Add(_side);
++		_searching = new StackPanel
++		{
++			Orientation = Orientation.Horizontal,
++			Children =
++			{
++				X360Ui.Spinner(30, X360Ui.Brush(0xFFDADADA), 2.5),
++				X360Ui.Text("Searching for networks...", 24, X360Ui.Brush(0xFFDADADA))
++			}
++		};
++		((FrameworkElement)((StackPanel)_searching).Children[1]).Margin = new Thickness(14, -2, 0, 0);
++		_searching.At(TextX, ListY + 14).AddTo(Root);
++		ListFocused = false;
++		RefreshSide();
++	}
++
++	protected override string ItemText(int index)
++	{
++		return Items[index];
++	}
++
++	public override async void Shown()
++	{
++		if (_loaded)
++		{
++			return;
++		}
++		_loaded = true;
++		List<WifiNetwork?> found = new List<WifiNetwork?>();
++		if (WifiService.HasWiredConnection())
++		{
++			found.Add(null);
++		}
++		try
++		{
++			found.AddRange(await WifiService.GetNetworksAsync());
++		}
++		catch (Exception exception)
++		{
++			App.LogException(exception, "NetworkScreen.Shown");
++		}
++		_networks.Clear();
++		_networks.AddRange(found);
++		Items.Clear();
++		foreach (WifiNetwork? network in found)
++		{
++			Items.Add(network == null ? "Wired Network" : network.Ssid);
++		}
++		if (_searching != null)
++		{
++			Root.Children.Remove(_searching);
++			_searching = null;
++		}
++		if (!found.Any(n => n != null))
++		{
++			string note = WifiService.HasWirelessAdapter() ? "No wireless networks found. Make sure Wi-Fi is turned on in Windows." : "No wireless network adapter found.";
++			TextBlock text = X360Ui.Wrapped(note, 21, X360Ui.Brush(0xFFB8B8B8), BarWidth - 30);
++			text.At(TextX, ListY + Math.Max(1, Items.Count) * RowHeight + 14).AddTo(Root);
++		}
++		if (Items.Count == 0)
++		{
++			ListFocused = false;
++		}
++		else
++		{
++			ListFocused = true;
++			Index = 0;
++		}
++		Refresh(animate: false);
++		DrawConnectedMarks();
++		RefreshSide();
++	}
++
++	private void DrawConnectedMarks()
++	{
++		for (int i = 0; i < Math.Min(Items.Count, VisibleRows); i++)
++		{
++			WifiNetwork? network = _networks[i];
++			if (network == null || network.IsConnected)
++			{
++				X360Ui.Glyph("", 18, X360Ui.Brush(0xFFF0F0F0)).At(BarX + BarWidth - 36, ListY + i * RowHeight + 21).AddTo(Root);
++			}
++		}
++	}
++
++	private void RefreshSide()
++	{
++		_side.Children.Clear();
++		string[] labels = { "Other Networks", _state != null ? "Connect Later" : "Cancel" };
++		for (int i = 0; i < labels.Length; i++)
++		{
++			bool selected = !ListFocused && i == _tileIndex;
++			Border tile = X360Ui.Tile(labels[i], 155, selected);
++			tile.At(866, 275 + i * 159).AddTo(_side);
++		}
++	}
++
++	public override void Input(DashboardInputAction action)
++	{
++		switch (action)
++		{
++			case DashboardInputAction.MoveRight when ListFocused:
++				ListFocused = false;
++				Play("hover");
++				Refresh();
++				RefreshSide();
++				return;
++			case DashboardInputAction.MoveLeft when !ListFocused && Items.Count > 0:
++				ListFocused = true;
++				Play("hover");
++				Refresh();
++				RefreshSide();
++				return;
++			case DashboardInputAction.MoveUp when !ListFocused:
++			case DashboardInputAction.MoveDown when !ListFocused:
++				int next = action == DashboardInputAction.MoveUp ? 0 : 1;
++				if (next != _tileIndex)
++				{
++					_tileIndex = next;
++					Play("hover");
++					RefreshSide();
++				}
++				return;
++			case DashboardInputAction.Activate when !ListFocused:
++				Play("select");
++				if (_tileIndex == 0)
++				{
++					ConnectHidden();
++				}
++				else if (_state != null)
++				{
++					SetupScreens.ApplySettings(Overlay, _state);
++				}
++				else
++				{
++					Overlay.GoBack();
++				}
++				return;
++			case DashboardInputAction.Activate when ListFocused && Items.Count > 0:
++				Play("select");
++				Connect(_networks[Index]);
++				return;
++		}
++		base.Input(action);
++		if (ListFocused)
++		{
++			DrawConnectedMarks();
++		}
++	}
++
++	private void Connect(WifiNetwork? network)
++	{
++		if (network == null || network.IsConnected || !network.IsSecured || network.HasProfile)
++		{
++			Overlay.Navigate(new ConnectingScreen(_state, network, null));
++			return;
++		}
++		Overlay.Navigate(new KeyboardScreen("Enter Password", "Enter the password (security key) for " + network.Ssid + ".", string.Empty, 63)
++		{
++			Password = true,
++			Validate = text => text.Length >= 8 || text.Length is 5 or 13 ? null : "The password is too short.",
++			Done = (overlay, text) => overlay.Navigate(new ConnectingScreen(_state, network, text))
++		});
++	}
++
++	private void ConnectHidden()
++	{
++		Overlay.Navigate(new KeyboardScreen("Other Networks", "Enter the name (SSID) of the wireless network.", string.Empty, 32)
++		{
++			Validate = text => text.Length > 0 ? null : "Enter the network name.",
++			Done = (overlay, ssid) => overlay.Navigate(new KeyboardScreen("Enter Password", "Enter the password for " + ssid + ". Leave it empty for an open network.", string.Empty, 63)
++			{
++				Password = true,
++				Done = (o, password) => o.Navigate(new ConnectingScreen(_state, new WifiNetwork
++				{
++					Ssid = ssid,
++					ProfileName = ssid,
++					IsSecured = password.Length > 0,
++					AuthAlgorithm = 7,
++					CipherAlgorithm = 4
++				}, password))
++			})
++		});
++	}
++}
++
++// "Connecting to network": tests the network, the Internet and Xbox LIVE.
++internal sealed class ConnectingScreen : X360Screen
++{
++	private readonly SetupState? _state;
++
++	private readonly WifiNetwork? _network;
++
++	private readonly string? _password;
++
++	private readonly CancellationTokenSource _cancel = new CancellationTokenSource();
++
++	private readonly (string Label, Canvas Icon, TextBlock Status, Canvas Badge)[] _rows = new (string, Canvas, TextBlock, Canvas)[3];
++
++	private TextBlock _title = null!;
++
++	private TextBlock _subtitle = null!;
++
++	private Border _tile = null!;
++
++	private FrameworkElement? _ring;
++
++	private bool _finished;
++
++	private bool _succeeded;
++
++	private bool _started;
++
++	public ConnectingScreen(SetupState? state, WifiNetwork? network, string? password)
++	{
++		_state = state;
++		_network = network;
++		_password = password;
++	}
++
++	public override int SetupTab => _state != null ? 3 : -1;
++
++	public override void Build()
++	{
++		_title = X360Ui.Text("Connecting to network", 40, X360Ui.Brush(0xFFF2F2F2), X360Ui.SegoeLight).At(174, 204).AddTo(Root);
++		_subtitle = X360Ui.Text(string.Empty, 24, X360Ui.Brush(0xFFE0E0E0)).At(176, 254).AddTo(Root);
++		string[] labels = { "Network:", "Internet:", "Xbox Live:" };
++		for (int i = 0; i < 3; i++)
++		{
++			double y = 318 + i * 105;
++			Canvas icon = RowIcon(i);
++			icon.At(174, y).AddTo(Root);
++			Canvas badge = new Canvas();
++			badge.At(196, y + 30).AddTo(Root);
++			TextBlock label = X360Ui.Text(i == 0 || _state == null || true ? labels[i] : string.Empty, 24, X360Ui.Brush(0xFFD8D8D8)).At(265, y + 14);
++			label.Visibility = i == 0 ? Visibility.Visible : Visibility.Hidden;
++			Root.Children.Add(label);
++			TextBlock status = X360Ui.Text(string.Empty, 24, X360Ui.Brush(0xFFD8D8D8)).At(518, y + 14).AddTo(Root);
++			_rows[i] = (labels[i], icon, status, badge);
++			icon.Tag = label;
++		}
++		_tile = X360Ui.Tile("Stop Connection", 160, selected: true);
++		_tile.At(829, 270).AddTo(Root);
++	}
++
++	private static Canvas RowIcon(int row)
++	{
++		Canvas canvas = new Canvas
++		{
++			Width = 48,
++			Height = 48
++		};
++		Brush brush = X360Ui.Brush(0xFFEDEDED);
++		switch (row)
++		{
++			case 0:
++				for (int i = 0; i < 4; i++)
++				{
++					X360Ui.Rect(6, 8 + i * 6, brush).At(8 + i * 8, 34 - (8 + i * 6)).AddTo(canvas);
++				}
++				break;
++			case 1:
++				X360Ui.Glyph("", 30, brush).At(4, 6).AddTo(canvas);
++				break;
++			default:
++				// The Xbox LIVE "!" mark.
++				X360Ui.Rect(7, 22, brush).At(16, 6).AddTo(canvas);
++				X360Ui.Rect(7, 6, brush).At(16, 31).AddTo(canvas);
++				break;
++		}
++		return canvas;
++	}
++
++	private void SetBadge(int row, bool done)
++	{
++		Canvas badge = _rows[row].Badge;
++		badge.Children.Clear();
++		Ellipse ball = new Ellipse
++		{
++			Width = 20,
++			Height = 20,
++			Fill = done ? X360Ui.Brush(0xFFF2F2F2) : X360Ui.Brush(0xFF2E9A1A),
++			Stroke = X360Ui.Brush(0xFF141416),
++			StrokeThickness = 2
++		};
++		badge.Children.Add(ball);
++		TextBlock mark = done ? X360Ui.Glyph("", 11, X360Ui.Brush(0xFF141416)) : X360Ui.Text("?", 13, Brushes.White, X360Ui.Segoe, FontWeights.Bold);
++		mark.At(done ? 4.5 : 6.5, done ? 4.5 : 1).AddTo(badge);
++	}
++
++	private void Testing(int row)
++	{
++		((UIElement)_rows[row].Icon.Tag).Visibility = Visibility.Visible;
++		_rows[row].Status.Text = "Testing...";
++		SetBadge(row, done: false);
++		if (_ring != null)
++		{
++			Root.Children.Remove(_ring);
++		}
++		_ring = X360Ui.Spinner(66, X360Ui.Brush(0xFFBFBFBF), 2.5).At(165, 318 + row * 105 - 9).AddTo(Root);
++	}
++
++	private void Result(int row, bool ok, string? text = null)
++	{
++		_rows[row].Status.Text = text ?? (ok ? "Connected" : "Not connected");
++		if (ok)
++		{
++			SetBadge(row, done: true);
++		}
++		else
++		{
++			_rows[row].Badge.Children.Clear();
++		}
++		if (_ring != null)
++		{
++			Root.Children.Remove(_ring);
++			_ring = null;
++		}
++	}
++
++	public override async void Shown()
++	{
++		if (_started)
++		{
++			return;
++		}
++		_started = true;
++		CancellationToken token = _cancel.Token;
++		try
++		{
++			Testing(0);
++			bool network;
++			if (_network != null && !_network.IsConnected)
++			{
++				network = await WifiService.ConnectAsync(_network, _password, token);
++			}
++			else
++			{
++				await Task.Delay(1400, token);
++				network = _network != null || WifiService.IsNetworkAvailable();
++			}
++			Result(0, network);
++			if (!network)
++			{
++				Fail(_network != null ? "Couldn't connect to " + _network.Ssid + ". Check the password and try again." : "Couldn't connect to the network.");
++				return;
++			}
++			await Task.Delay(500, token);
++			Testing(1);
++			bool internet = await WifiService.TestInternetAsync(token);
++			await Task.Delay(700, token);
++			Result(1, internet);
++			if (!internet)
++			{
++				Fail("Your network is connected, but it can't reach the Internet.");
++				return;
++			}
++			await Task.Delay(500, token);
++			Testing(2);
++			await Task.Delay(1600, token);
++			Result(2, ok: true);
++			Succeed();
++		}
++		catch (OperationCanceledException)
++		{
++		}
++		catch (Exception exception)
++		{
++			App.LogException(exception, "ConnectingScreen");
++			Fail("Something went wrong while connecting.");
++		}
++	}
++
++	public override void Hidden()
++	{
++		_cancel.Cancel();
++	}
++
++	private void Succeed()
++	{
++		_finished = true;
++		_succeeded = true;
++		_title.Text = "Connected";
++		_subtitle.Text = "You're connected to the Internet now.";
++		Canvas.SetTop(_title, 196);
++		ReplaceTile("Next");
++		Play("select");
++	}
++
++	private void Fail(string message)
++	{
++		_finished = true;
++		_title.Text = "Connection failed";
++		_subtitle.Text = message;
++		Canvas.SetTop(_title, 196);
++		ReplaceTile("Try Again");
++		Play("back");
++	}
++
++	private void ReplaceTile(string label)
++	{
++		Root.Children.Remove(_tile);
++		_tile = X360Ui.Tile(label, 155, selected: true);
++		_tile.At(824, 262).AddTo(Root);
++		X360Ui.FadeIn(_tile, 0, 200);
++	}
++
++	public override void Input(DashboardInputAction action)
++	{
++		if (action == DashboardInputAction.Back)
++		{
++			Play("back");
++			_cancel.Cancel();
++			Overlay.GoBack();
++			return;
++		}
++		if (action != DashboardInputAction.Activate)
++		{
++			return;
++		}
++		Play("select");
++		if (!_finished)
++		{
++			_cancel.Cancel();
++			Overlay.GoBack();
++		}
++		else if (!_succeeded)
++		{
++			Overlay.GoBack();
++		}
++		else if (_state != null)
++		{
++			SetupScreens.ApplySettings(Overlay, _state);
++		}
++		else
++		{
++			Overlay.Replace(SystemScreens.SystemSettings());
++		}
++	}
++}
++
++// The console's on-screen keyboard.
++internal sealed class KeyboardScreen : X360Screen
++{
++	private sealed class KeyDef
++	{
++		public required Rect Bounds;
++
++		public required string Label;
++
++		public string? Sub;
++
++		public char? Glyph;
++
++		public required Action Press;
++
++		public bool Disabled;
++	}
++
++	private static readonly string[] Letters = { "1234567890", "qwertyuiop", "asdfghjkl-", "zxcvbnm_@." };
++
++	private static readonly string[] Symbols = { "!@#$%^&*()", "~`=+[]{}\\|", ";:'\",<>/?-", "_.€£¥§¿¡•…" };
++
++	private readonly string _title;
++
++	private readonly string _description;
++
++	private readonly int _maxLength;
++
++	private readonly List<KeyDef> _keys = new List<KeyDef>();
++
++	private readonly Canvas _keyLayer = new Canvas();
++
++	private string _text;
++
++	private int _caret;
++
++	private bool _replaceOnType = true;
++
++	private bool _caps;
++
++	private bool _symbols;
++
++	private int _selected;
++
++	private TextBlock _textBlock = null!;
++
++	private TextBlock _descriptionBlock = null!;
++
++	private Border _highlight = null!;
++
++	private Rectangle _caretMark = null!;
++
++	public KeyboardScreen(string title, string description, string initial, int maxLength)
++	{
++		_title = title;
++		_description = description;
++		_text = initial;
++		_caret = initial.Length;
++		_maxLength = maxLength;
++	}
++
++	public bool Password { get; init; }
++
++	public Func<string, string?>? Validate { get; init; }
++
++	public Action<X360SystemOverlay, string>? Done { get; init; }
++
++	public override ScreenStyle Style => ScreenStyle.Black;
++
++	public override void Build()
++	{
++		X360Ui.Text(_title, 24, Brushes.White).At(76, 20).AddTo(Root);
++		X360Ui.Text(X360Ui.Clock(), 24, Brushes.White).At(890, 20).AddTo(Root);
++		// Upper panel: prompt and the text being typed.
++		X360Ui.Rect(900, 240, X360Ui.Vertical((0, 0xFFD2D2D2), (1, 0xFFA9A9A9))).At(47, 58).AddTo(Root);
++		_descriptionBlock = X360Ui.Wrapped(_description, 22, X360Ui.Brush(0xFF2E2E2E), 840);
++		_descriptionBlock.At(80, 72).AddTo(Root);
++		X360Ui.Rect(742, 46, Brushes.White).At(80, 233).AddTo(Root);
++		new Rectangle
++		{
++			Width = 742,
++			Height = 46,
++			Stroke = X360Ui.Brush(0xFF8C8C8C),
++			StrokeThickness = 1
++		}.At(80, 233).AddTo(Root);
++		_highlight = new Border
++		{
++			Height = 30,
++			Background = X360Ui.Brush(0xFF7DC75A)
++		};
++		_highlight.At(88, 241).AddTo(Root);
++		_textBlock = X360Ui.Text(string.Empty, 24, X360Ui.Brush(0xFF1E1E1E)).At(90, 239).AddTo(Root);
++		_caretMark = X360Ui.Rect(2, 30, X360Ui.Brush(0xFF1E1E1E)).At(90, 241).AddTo(Root);
++		_caretMark.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimationUsingKeyFrames
++		{
++			RepeatBehavior = RepeatBehavior.Forever,
++			KeyFrames =
++			{
++				new DiscreteDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.Zero)),
++				new DiscreteDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(530))),
++				new DiscreteDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(1060)))
++			}
++		});
++		// Lower panel: the keys.
++		X360Ui.Rect(900, 312, X360Ui.Brush(0xFFE4E4E4)).At(47, 298).AddTo(Root);
++		Root.Children.Add(_keyLayer);
++		BuildKeys();
++		_selected = _keys.FindIndex(k => k.Label == "1");
++		RedrawKeys();
++		RedrawText();
++	}
++
++	private void BuildKeys()
++	{
++		_keys.Clear();
++		string[] rows = _symbols ? Symbols : Letters;
++		for (int r = 0; r < rows.Length; r++)
++		{
++			for (int c = 0; c < rows[r].Length; c++)
++			{
++				char ch = rows[r][c];
++				char shown = _caps && char.IsLetter(ch) ? char.ToUpperInvariant(ch) : ch;
++				_keys.Add(new KeyDef
++				{
++					Bounds = new Rect(232 + c * 52, 312 + r * 40, 49, 37),
++					Label = shown.ToString(),
++					Press = () => Insert(shown.ToString())
++				});
++			}
++		}
++		_keys.Add(new KeyDef { Bounds = new Rect(80, 312, 142, 77), Label = "Left", Sub = "LB", Glyph = '', Press = () => MoveCaret(-1) });
++		_keys.Add(new KeyDef { Bounds = new Rect(80, 392, 142, 77), Label = _symbols ? "Letters" : "Symbols", Sub = "LT", Press = ToggleSymbols });
++		_keys.Add(new KeyDef { Bounds = new Rect(80, 472, 142, 60), Label = "Caps", Glyph = '', Press = ToggleCaps });
++		_keys.Add(new KeyDef { Bounds = new Rect(772, 312, 142, 77), Label = "Right", Sub = "RB", Glyph = '', Press = () => MoveCaret(1) });
++		_keys.Add(new KeyDef { Bounds = new Rect(772, 392, 142, 77), Label = "Accents", Sub = "RT", Disabled = true, Press = () => { } });
++		_keys.Add(new KeyDef { Bounds = new Rect(772, 472, 142, 60), Label = "Done", Glyph = '', Press = Submit });
++		_keys.Add(new KeyDef { Bounds = new Rect(232, 535, 258, 42), Label = "Backspace", Sub = "X", Press = Backspace });
++		_keys.Add(new KeyDef { Bounds = new Rect(496, 535, 266, 42), Label = "Space", Sub = "Y", Press = () => Insert(" ") });
++	}
++
++	private void RedrawKeys()
++	{
++		_keyLayer.Children.Clear();
++		for (int i = 0; i < _keys.Count; i++)
++		{
++			KeyDef key = _keys[i];
++			bool selected = i == _selected;
++			Border box = new Border
++			{
++				Width = key.Bounds.Width,
++				Height = key.Bounds.Height,
++				Background = selected ? X360Ui.SelectionBrush : X360Ui.Vertical((0, 0xFFFDFDFD), (1, 0xFFEDEDED)),
++				BorderBrush = X360Ui.Brush(selected ? 0xFF1E7A10 : 0xFFAFAFAF),
++				BorderThickness = new Thickness(1)
++			};
++			Brush ink = selected ? Brushes.White : X360Ui.Brush(key.Disabled ? 0xFFB0B0B0 : 0xFF3A3A3A);
++			if (key.Label.Length == 1 && key.Sub == null)
++			{
++				TextBlock text = X360Ui.Text(key.Label, 22, ink);
++				text.HorizontalAlignment = HorizontalAlignment.Center;
++				text.VerticalAlignment = VerticalAlignment.Center;
++				text.Margin = new Thickness(0, -3, 0, 0);
++				box.Child = text;
++			}
++			else
++			{
++				StackPanel panel = new StackPanel
++				{
++					HorizontalAlignment = HorizontalAlignment.Center,
++					VerticalAlignment = VerticalAlignment.Center,
++					Orientation = key.Bounds.Height < 50 ? Orientation.Horizontal : Orientation.Vertical
++				};
++				StackPanel top = new StackPanel
++				{
++					Orientation = Orientation.Horizontal,
++					HorizontalAlignment = HorizontalAlignment.Center
++				};
++				if (key.Glyph.HasValue)
++				{
++					top.Children.Add(X360Ui.Glyph(key.Glyph.Value.ToString(), 18, ink));
++				}
++				if (key.Sub != null)
++				{
++					FrameworkElement sub = key.Sub.Length == 1 ? X360Ui.PadButton(key.Sub[0], 22) : new Border
++					{
++						Background = X360Ui.Brush(selected ? 0xFFFFFFFF : 0xFF3A3A3A),
++						CornerRadius = new CornerRadius(5),
++						Padding = new Thickness(4, 0, 4, 1),
++						Child = X360Ui.Text(key.Sub, 13, selected ? X360Ui.Brush(0xFF2E9A1A) : Brushes.White, X360Ui.Segoe, FontWeights.Bold)
++					};
++					sub.Margin = new Thickness(6, 0, 6, 0);
++					sub.VerticalAlignment = VerticalAlignment.Center;
++					top.Children.Add(sub);
++				}
++				if (top.Children.Count > 0)
++				{
++					panel.Children.Add(top);
++				}
++				TextBlock label = X360Ui.Text(key.Label, 20, ink);
++				label.HorizontalAlignment = HorizontalAlignment.Center;
++				label.VerticalAlignment = VerticalAlignment.Center;
++				panel.Children.Add(label);
++				box.Child = panel;
++			}
++			box.At(key.Bounds.X, key.Bounds.Y).AddTo(_keyLayer);
++		}
++	}
++
++	private void RedrawText()
++	{
++		string shown = Password ? new string('•', _text.Length) : _text;
++		_textBlock.Text = shown;
++		FormattedText before = new FormattedText(shown.Substring(0, Math.Min(_caret, shown.Length)), CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, new Typeface(X360Ui.Segoe, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal), 24, Brushes.Black, 1.0);
++		Canvas.SetLeft(_caretMark, 90 + before.WidthIncludingTrailingWhitespace);
++		if (_replaceOnType && shown.Length > 0)
++		{
++			FormattedText all = new FormattedText(shown, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, new Typeface(X360Ui.Segoe, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal), 24, Brushes.Black, 1.0);
++			_highlight.Width = all.WidthIncludingTrailingWhitespace + 4;
++			_highlight.Visibility = Visibility.Visible;
++		}
++		else
++		{
++			_highlight.Visibility = Visibility.Collapsed;
++		}
++	}
++
++	private void Insert(string text)
++	{
++		if (_replaceOnType)
++		{
++			_text = string.Empty;
++			_caret = 0;
++			_replaceOnType = false;
++		}
++		if (_text.Length + text.Length > _maxLength)
++		{
++			Play("back");
++			return;
++		}
++		_text = _text.Insert(_caret, text);
++		_caret += text.Length;
++		Play("guide-type-" + (1 + Random.Shared.Next(3)));
++		RedrawText();
++	}
++
++	private void Backspace()
++	{
++		if (_replaceOnType)
++		{
++			_replaceOnType = false;
++			_text = string.Empty;
++			_caret = 0;
++		}
++		else if (_caret > 0)
++		{
++			_text = _text.Remove(_caret - 1, 1);
++			_caret--;
++		}
++		Play("guide-type-backspace");
++		RedrawText();
++	}
++
++	private void MoveCaret(int delta)
++	{
++		_replaceOnType = false;
++		_caret = Math.Clamp(_caret + delta, 0, _text.Length);
++		Play("hover");
++		RedrawText();
++	}
++
++	private void ToggleCaps()
++	{
++		_caps = !_caps;
++		RebuildKeepingSelection();
++	}
++
++	private void ToggleSymbols()
++	{
++		_symbols = !_symbols;
++		RebuildKeepingSelection();
++	}
++
++	private void RebuildKeepingSelection()
++	{
++		Rect bounds = _keys[_selected].Bounds;
++		BuildKeys();
++		_selected = Math.Max(0, _keys.FindIndex(k => k.Bounds == bounds));
++		Play("hover");
++		RedrawKeys();
++	}
++
++	private void Submit()
++	{
++		string text = _text.Trim();
++		string? error = Validate?.Invoke(text);
++		if (error != null)
++		{
++			_descriptionBlock.Text = error;
++			_descriptionBlock.Foreground = X360Ui.Brush(0xFF9A1C10);
++			Play("back");
++			return;
++		}
++		Play("select");
++		Done?.Invoke(Overlay, text);
++	}
++
++	private void MoveSelection(double dx, double dy)
++	{
++		Rect from = _keys[_selected].Bounds;
++		Point center = new Point(from.X + from.Width / 2, from.Y + from.Height / 2);
++		int best = -1;
++		double bestScore = double.MaxValue;
++		for (int i = 0; i < _keys.Count; i++)
++		{
++			if (i == _selected)
++			{
++				continue;
++			}
++			Rect to = _keys[i].Bounds;
++			Point c = new Point(to.X + to.Width / 2, to.Y + to.Height / 2);
++			double along = (c.X - center.X) * dx + (c.Y - center.Y) * dy;
++			if (along <= 4)
++			{
++				continue;
++			}
++			double across = Math.Abs((c.X - center.X) * dy) + Math.Abs((c.Y - center.Y) * dx);
++			// Keys overlapping the current one across the move axis are
++			// preferred, like the console's grid.
++			bool overlaps = dx != 0 ? to.Top < from.Bottom && to.Bottom > from.Top : to.Left < from.Right && to.Right > from.Left;
++			double score = along + across * (overlaps ? 0.3 : 3);
++			if (score < bestScore)
++			{
++				bestScore = score;
++				best = i;
++			}
++		}
++		if (best >= 0)
++		{
++			_selected = best;
++			Play("hover");
++			RedrawKeys();
++		}
++	}
++
++	public override void Input(DashboardInputAction action)
++	{
++		switch (action)
++		{
++			case DashboardInputAction.MoveLeft:
++				MoveSelection(-1, 0);
++				break;
++			case DashboardInputAction.MoveRight:
++				MoveSelection(1, 0);
++				break;
++			case DashboardInputAction.MoveUp:
++				MoveSelection(0, -1);
++				break;
++			case DashboardInputAction.MoveDown:
++				MoveSelection(0, 1);
++				break;
++			case DashboardInputAction.Activate:
++				if (!_keys[_selected].Disabled)
++				{
++					_keys[_selected].Press();
++				}
++				break;
++			case DashboardInputAction.Details:
++				Backspace();
++				break;
++			case DashboardInputAction.Search:
++				Insert(" ");
++				break;
++			case DashboardInputAction.PreviousTab:
++				MoveCaret(-1);
++				break;
++			case DashboardInputAction.NextTab:
++				MoveCaret(1);
++				break;
++			case DashboardInputAction.LeftTrigger:
++				ToggleSymbols();
++				break;
++			case DashboardInputAction.LeftThumbClick:
++				ToggleCaps();
++				break;
++			case DashboardInputAction.Options:
++				Submit();
++				break;
++			case DashboardInputAction.Back:
++				Play("back");
++				Overlay.GoBack();
++				break;
++		}
++	}
++
++	// A PC keyboard types directly.
++	public override bool Key(KeyEventArgs e)
++	{
++		switch (e.Key)
++		{
++			case System.Windows.Input.Key.Back:
++				Backspace();
++				return true;
++			case System.Windows.Input.Key.Enter:
++				Submit();
++				return true;
++			case System.Windows.Input.Key.Escape:
++				Play("back");
++				Overlay.GoBack();
++				return true;
++			case System.Windows.Input.Key.Left:
++			case System.Windows.Input.Key.Right:
++			case System.Windows.Input.Key.Up:
++			case System.Windows.Input.Key.Down:
++				return false;
++		}
++		string? text = KeyText(e);
++		if (text != null)
++		{
++			Insert(text);
++			return true;
++		}
++		return false;
++	}
++
++	private static string? KeyText(KeyEventArgs e)
++	{
++		if ((Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Alt)) != 0)
++		{
++			return null;
++		}
++		bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
++		bool caps = Keyboard.IsKeyToggled(System.Windows.Input.Key.CapsLock);
++		Key key = e.Key == System.Windows.Input.Key.System ? e.SystemKey : e.Key;
++		if (key >= System.Windows.Input.Key.A && key <= System.Windows.Input.Key.Z)
++		{
++			char c = (char)('a' + (key - System.Windows.Input.Key.A));
++			return (shift ^ caps ? char.ToUpperInvariant(c) : c).ToString();
++		}
++		if (key >= System.Windows.Input.Key.D0 && key <= System.Windows.Input.Key.D9)
++		{
++			const string shifted = ")!@#$%^&*(";
++			int digit = key - System.Windows.Input.Key.D0;
++			return shift ? shifted[digit].ToString() : digit.ToString(CultureInfo.InvariantCulture);
++		}
++		if (key >= System.Windows.Input.Key.NumPad0 && key <= System.Windows.Input.Key.NumPad9)
++		{
++			return (key - System.Windows.Input.Key.NumPad0).ToString(CultureInfo.InvariantCulture);
++		}
++		return key switch
++		{
++			System.Windows.Input.Key.Space => " ",
++			System.Windows.Input.Key.OemMinus => shift ? "_" : "-",
++			System.Windows.Input.Key.OemPeriod => shift ? ">" : ".",
++			System.Windows.Input.Key.OemComma => shift ? "<" : ",",
++			System.Windows.Input.Key.OemPlus => shift ? "+" : "=",
++			System.Windows.Input.Key.Oem2 => shift ? "?" : "/",
++			System.Windows.Input.Key.Oem1 => shift ? ":" : ";",
++			System.Windows.Input.Key.Oem7 => shift ? "\"" : "'",
++			_ => null
++		};
++	}
++}
++
++// "Save Profile": the new offline profile's gamercard.
++internal sealed class SaveProfileScreen : X360Screen
++{
++	private readonly SetupState _state;
++
++	private readonly string[] _options = { "Join Xbox Live", "Customize Profile", "Done" };
++
++	private readonly Canvas _menu = new Canvas();
++
++	private int _index;
++
++	public SaveProfileScreen(SetupState state)
++	{
++		_state = state;
++	}
++
++	public override ScreenStyle Style => ScreenStyle.Black;
++
++	public override void Shown()
++	{
++		if (_shownPicture != null && _shownPicture != _state.GamerPicturePath)
++		{
++			Root.Children.Clear();
++			_menu.Children.Clear();
++			Build();
++		}
++	}
++
++	private string? _shownPicture;
++
++	public override void Build()
++	{
++		_shownPicture = _state.GamerPicturePath;
++		_index = 0;
++		X360Ui.Text("Save Profile", 24, Brushes.White).At(30, 22).AddTo(Root);
++		X360Ui.Picture(_state.GamerPicturePath, 50, 50, 100).At(427, 6).AddTo(Root);
++		X360Ui.Text(X360Ui.Clock(), 24, Brushes.White).At(800, 22).AddTo(Root);
++		// Left: what happened, and what's next.
++		X360Ui.Rect(450, 555, X360Ui.Brush(0xFFF2F2F2)).At(0, 63).AddTo(Root);
++		X360Ui.Wrapped("You now have your very own offline profile.\n\nJoin Xbox Live for free!", 26, X360Ui.Brush(0xFF2A2A2A), 410).At(20, 80).AddTo(Root);
++		Root.Children.Add(_menu);
++		// Right: the gamercard.
++		X360Ui.Rect(450, 38, X360Ui.Brush(0xFFBDBDBD)).At(452, 75).AddTo(Root);
++		X360Ui.Text(_state.Gamertag, 24, X360Ui.Brush(0xFF2A2A2A)).At(468, 78).AddTo(Root);
++		X360Ui.Rect(450, 110, Brushes.White).At(452, 115).AddTo(Root);
++		X360Ui.Picture(_state.GamerPicturePath, 95, 104, 200).At(466, 118).AddTo(Root);
++		X360Ui.Text("Games\nGamerscore\nAchievements", 25, X360Ui.Brush(0xFF2A2A2A)).At(575, 117).AddTo(Root);
++		FrameworkElement g = X360Ui.PadButton('G', 22);
++		((Ellipse)((Grid)g).Children[0]).Fill = X360Ui.Brush(0xFF6E6E6E);
++		g.At(862, 152).AddTo(Root);
++		X360Ui.Rect(450, 393, X360Ui.Brush(0xFF8F8F8F)).At(452, 225).AddTo(Root);
++		X360Ui.Wrapped("Save your profile to your console and choose a gamer picture.\n\nWhen you join Xbox Live, you can also claim your own unique gamertag, set up a bio, and choose your gamer zone.", 26, Brushes.White, 410).At(470, 238).AddTo(Root);
++		Redraw();
++	}
++
++	private void Redraw()
++	{
++		_menu.Children.Clear();
++		for (int i = 0; i < _options.Length; i++)
++		{
++			double y = 485 + i * 44;
++			X360Ui.Rect(450, 1, X360Ui.Brush(0xFFC9C9C9)).At(0, y - 1).AddTo(_menu);
++			if (i == _index)
++			{
++				X360Ui.Rect(450, 43, X360Ui.SelectionBrush).At(0, y).AddTo(_menu);
++			}
++			X360Ui.Text(_options[i], 25, i == _index ? Brushes.White : X360Ui.Brush(0xFF2A2A2A)).At(16, y + 4).AddTo(_menu);
++		}
++	}
++
++	public override void Input(DashboardInputAction action)
++	{
++		switch (action)
++		{
++			case DashboardInputAction.MoveUp when _index > 0:
++				_index--;
++				Play("hover");
++				Redraw();
++				break;
++			case DashboardInputAction.MoveDown when _index < _options.Length - 1:
++				_index++;
++				Play("hover");
++				Redraw();
++				break;
++			case DashboardInputAction.Activate:
++				Play("select");
++				switch (_index)
++				{
++					case 0:
++						Overlay.Navigate(LiveScreens.Welcome(_state));
++						break;
++					case 1:
++						Overlay.Navigate(new GamerPictureScreen(_state));
++						break;
++					default:
++						SetupScreens.Finish(Overlay, _state, joinedLive: false);
++						break;
++				}
++				break;
++			case DashboardInputAction.Back:
++				Play("back");
++				Overlay.GoBack();
++				break;
++		}
++	}
++}
++
++// "Customize Profile": pick a gamer picture.
++internal sealed class GamerPictureScreen : X360Screen
++{
++	private const int Columns = 6;
++
++	private readonly SetupState _state;
++
++	private readonly List<string> _pictures = new List<string>();
++
++	private readonly Canvas _grid = new Canvas();
++
++	private int _index;
++
++	public GamerPictureScreen(SetupState state)
++	{
++		_state = state;
++	}
++
++	public override ScreenStyle Style => ScreenStyle.Black;
++
++	public override void Build()
++	{
++		X360Ui.Text("Change Gamer Picture", 24, Brushes.White).At(30, 22).AddTo(Root);
++		X360Ui.Text(X360Ui.Clock(), 24, Brushes.White).At(800, 22).AddTo(Root);
++		X360Ui.Rect(902, 555, X360Ui.Vertical((0, 0xFFE6E6E6), (1, 0xFFCFCFCF))).At(0, 63).AddTo(Root);
++		X360Ui.Text("Choose a gamer picture for " + _state.Gamertag + ".", 24, X360Ui.Brush(0xFF2A2A2A)).At(24, 78).AddTo(Root);
++		_pictures.Add(System.IO.Path.Combine("Assets", "Profile", "profilepicture.jpg"));
++		string pool = AppPaths.FindFolder(System.IO.Path.Combine("Assets", "Profile", "FriendPool"));
++		if (Directory.Exists(pool))
++		{
++			_pictures.AddRange(Directory.EnumerateFiles(pool).Where(IsImage).OrderBy(f => f, StringComparer.OrdinalIgnoreCase));
++		}
++		string custom = System.IO.Path.Combine(AppPaths.UserDataFolder, "GamerPictures");
++		if (Directory.Exists(custom))
++		{
++			_pictures.AddRange(Directory.EnumerateFiles(custom).Where(IsImage));
++		}
++		_index = Math.Max(0, _pictures.FindIndex(p => string.Equals(Portable(p), Portable(_state.GamerPicturePath), StringComparison.OrdinalIgnoreCase)));
++		Root.Children.Add(_grid);
++		Redraw();
++	}
++
++	private static bool IsImage(string path)
++	{
++		string extension = System.IO.Path.GetExtension(path);
++		return extension.Equals(".png", StringComparison.OrdinalIgnoreCase) || extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase) || extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase);
++	}
++
++	// The last cell picks a picture from the PC.
++	private int Count => _pictures.Count + 1;
++
++	private void Redraw()
++	{
++		_grid.Children.Clear();
++		int firstRow = Math.Max(0, _index / Columns - 2);
++		for (int i = firstRow * Columns; i < Math.Min(Count, (firstRow + 3) * Columns); i++)
++		{
++			double x = 28 + i % Columns * 143;
++			double y = 126 + (i / Columns - firstRow) * 150;
++			bool selected = i == _index;
++			Border cell = new Border
++			{
++				Width = 128,
++				Height = 128,
++				BorderThickness = new Thickness(selected ? 5 : 1),
++				BorderBrush = selected ? X360Ui.SelectionBrush : X360Ui.Brush(0xFF9A9A9A),
++				Background = X360Ui.Brush(0xFFF7F7F7)
++			};
++			if (i < _pictures.Count)
++			{
++				cell.Child = X360Ui.Picture(_pictures[i], 118, 118, 160);
++			}
++			else
++			{
++				StackPanel browse = new StackPanel
++				{
++					VerticalAlignment = VerticalAlignment.Center,
++					Children =
++					{
++						X360Ui.Glyph("", 36, X360Ui.Brush(0xFF4A4A4A)),
++						X360Ui.Text("From PC...", 18, X360Ui.Brush(0xFF4A4A4A))
++					}
++				};
++				foreach (FrameworkElement child in browse.Children)
++				{
++					child.HorizontalAlignment = HorizontalAlignment.Center;
++				}
++				cell.Child = browse;
++			}
++			cell.At(x, y).AddTo(_grid);
++		}
++	}
++
++	public override void Input(DashboardInputAction action)
++	{
++		int previous = _index;
++		switch (action)
++		{
++			case DashboardInputAction.MoveLeft when _index % Columns > 0:
++				_index--;
++				break;
++			case DashboardInputAction.MoveRight when _index % Columns < Columns - 1 && _index < Count - 1:
++				_index++;
++				break;
++			case DashboardInputAction.MoveUp when _index >= Columns:
++				_index -= Columns;
++				break;
++			case DashboardInputAction.MoveDown:
++				_index = Math.Min(Count - 1, _index + Columns);
++				break;
++			case DashboardInputAction.Activate:
++				Play("select");
++				if (_index < _pictures.Count)
++				{
++					_state.GamerPicturePath = Portable(_pictures[_index]);
++					Overlay.GoBack();
++				}
++				else
++				{
++					BrowseForPicture();
++				}
++				return;
++			case DashboardInputAction.Back:
++				Play("back");
++				Overlay.GoBack();
++				return;
++		}
++		if (previous != _index)
++		{
++			Play("hover");
++			Redraw();
++		}
++	}
++
++	// Pictures that ship with DashX360 are stored relative to it.
++	private static string Portable(string path)
++	{
++		string app = System.IO.Path.TrimEndingDirectorySeparator(AppPaths.AppFolder) + System.IO.Path.DirectorySeparatorChar;
++		return path.StartsWith(app, StringComparison.OrdinalIgnoreCase) ? path.Substring(app.Length) : path;
++	}
++
++	private void BrowseForPicture()
++	{
++		Microsoft.Win32.OpenFileDialog dialog = new Microsoft.Win32.OpenFileDialog
++		{
++			Title = "Choose a gamer picture",
++			Filter = "Pictures|*.png;*.jpg;*.jpeg"
++		};
++		if (dialog.ShowDialog() != true)
++		{
++			return;
++		}
++		try
++		{
++			string folder = System.IO.Path.Combine(AppPaths.UserDataFolder, "GamerPictures");
++			Directory.CreateDirectory(folder);
++			string target = System.IO.Path.Combine(folder, System.IO.Path.GetFileName(dialog.FileName));
++			File.Copy(dialog.FileName, target, overwrite: true);
++			_state.GamerPicturePath = target;
++			Overlay.GoBack();
++		}
++		catch (Exception exception)
++		{
++			App.LogException(exception, "GamerPictureScreen.BrowseForPicture");
++		}
++	}
++}
++
++// The Xbox LIVE sign-up panels.
++internal static class LiveScreens
++{
++	public static X360Screen Welcome(SetupState state)
++	{
++		return new LivePanelScreen("Welcome to Xbox Live", "Signing up takes just a few steps:")
++		{
++			Bullets = new[] { "Set up a Microsoft account for Xbox Live", "Get your unique gamertag", "Choose your membership level" },
++			OnActivate = overlay => overlay.Navigate(Creating(state))
++		};
++	}
++
++	private static X360Screen Creating(SetupState state)
++	{
++		return new LivePanelScreen("Creating Account", "Please wait while your account is being created. Do not turn off your console or remove your storage device.")
++		{
++			Progress = true,
++			OnProgressDone = overlay => overlay.Replace(Congratulations(state))
++		};
++	}
++
++	private static X360Screen Congratulations(SetupState state)
++	{
++		return new LivePanelScreen("Congratulations!", "Your free account is now active.\n\nYour gamertag: " + state.Gamertag + "\n\nYou can change it any time in Settings, under Profile.")
++		{
++			ContinueBar = true,
++			DataSharing = true,
++			Gamertag = state.Gamertag,
++			OnActivate = overlay => SetupScreens.Finish(overlay, state, joinedLive: true)
++		};
++	}
++}
++
++internal sealed class LivePanelScreen : X360Screen
++{
++	private readonly string _title;
++
++	private readonly string _body;
++
++	private Canvas? _dialog;
++
++	private int _dialogIndex = 1;
++
++	private Canvas? _dialogOptions;
++
++	private bool _progressStarted;
++
++	public LivePanelScreen(string title, string body)
++	{
++		_title = title;
++		_body = body;
++	}
++
++	public string[]? Bullets { get; init; }
++
++	public bool Progress { get; init; }
++
++	public bool ContinueBar { get; init; }
++
++	public bool DataSharing { get; init; }
++
++	public string Gamertag { get; init; } = string.Empty;
++
++	public Action<X360SystemOverlay>? OnActivate { get; init; }
++
++	public Action<X360SystemOverlay>? OnProgressDone { get; init; }
++
++	public override ScreenStyle Style => ScreenStyle.Black;
++
++	public override IReadOnlyList<(char, string)> Hints => Progress ? Array.Empty<(char, string)>() : ContinueBar ? new[] { ('A', "Select") } : new[] { ('A', "Select"), ('B', "Back") };
++
++	public override void Build()
++	{
++		X360Ui.Text(_title, 31, Brushes.White, X360Ui.Segoe, FontWeights.SemiBold).At(90, 62).AddTo(Root);
++		Canvas panel = new Canvas
++		{
++			Width = 616,
++			Height = 500
++		};
++		panel.At(353, 122).AddTo(Root);
++		X360Ui.Rect(616, 500, X360Ui.Vertical((0, 0xFFDDDFE0), (1, 0xFFC8CACB))).At(0, 0).AddTo(panel);
++		X360Ui.Rect(616, 100, X360Ui.Vertical((0, 0xFF5E666B), (1, 0xFF4B5357))).At(0, 0).AddTo(panel);
++		X360Ui.Orb(60).At(28, 20).AddTo(panel);
++		X360Ui.Text("XBOX LIVE", 44, Brushes.White, X360Ui.SegoeLight).At(98, 22).AddTo(panel);
++		TextBlock body = X360Ui.Wrapped(_body, 21, X360Ui.Brush(0xFF3A3A3A), 560);
++		body.LineHeight = 30;
++		body.At(32, 120).AddTo(panel);
++		if (Bullets != null)
++		{
++			X360Ui.Rect(550, 170, X360Ui.Brush(0xFFBEC1C3)).At(34, 250).AddTo(panel);
++			for (int i = 0; i < Bullets.Length; i++)
++			{
++				X360Ui.Text("•  " + Bullets[i], 21, X360Ui.Brush(0xFF2F2F2F)).At(50, 266 + i * 52).AddTo(panel);
++			}
++		}
++		if (Progress)
++		{
++			X360Ui.Rect(545, 13, X360Ui.Brush(0xFFAAAEB0)).At(35, 400).AddTo(panel);
++			Rectangle bar = X360Ui.Rect(0, 13, X360Ui.SelectionBrush).At(35, 400).AddTo(panel);
++			bar.Tag = "progress";
++		}
++		if (ContinueBar)
++		{
++			X360Ui.Rect(616, 50, X360Ui.SelectionBrush).At(0, 450).AddTo(panel);
++			X360Ui.Text("Continue", 23, Brushes.White).At(32, 458).AddTo(panel);
++		}
++		if (DataSharing)
++		{
++			BuildDataSharing();
++		}
++	}
++
++	public override async void Shown()
++	{
++		if (DataSharing && _dialog != null)
++		{
++			ShowSignInToast();
++		}
++		if (!Progress || _progressStarted)
++		{
++			return;
++		}
++		_progressStarted = true;
++		Rectangle? bar = FindProgressBar(Root);
++		if (bar != null)
++		{
++			bar.BeginAnimation(FrameworkElement.WidthProperty, new DoubleAnimation(0, 545, TimeSpan.FromSeconds(4.2))
++			{
++				EasingFunction = new SineEase
++				{
++					EasingMode = EasingMode.EaseInOut
++				}
++			});
++		}
++		await Task.Delay(4600);
++		if (Overlay.IsOpen)
++		{
++			OnProgressDone?.Invoke(Overlay);
++		}
++	}
++
++	private static Rectangle? FindProgressBar(Panel panel)
++	{
++		foreach (UIElement child in panel.Children)
++		{
++			if (child is Rectangle { Tag: "progress" } rectangle)
++			{
++				return rectangle;
++			}
++			if (child is Panel inner && FindProgressBar(inner) is Rectangle found)
++			{
++				return found;
++			}
++		}
++		return null;
++	}
++
++	private void BuildDataSharing()
++	{
++		_dialog = new Canvas
++		{
++			Width = 1280,
++			Height = 720
++		};
++		X360Ui.Rect(1280, 720, X360Ui.Brush(0xB0000000)).At(0, 0).AddTo(_dialog);
++		Canvas box = new Canvas();
++		box.At(387, 40).AddTo(_dialog);
++		X360Ui.Rect(573, 600, X360Ui.Vertical((0, 0xFFEDEEEE), (1, 0xFFDCDDDD))).At(0, 0).AddTo(box);
++		X360Ui.Rect(573, 52, X360Ui.Vertical((0, 0xFF6A7175), (1, 0xFF4E5458))).At(0, 0).AddTo(box);
++		Grid info = new Grid
++		{
++			Width = 28,
++			Height = 28
++		};
++		info.Children.Add(new Ellipse
++		{
++			Fill = X360Ui.Brush(0xFF2E6FC4),
++			Stroke = Brushes.White,
++			StrokeThickness = 1.5
++		});
++		TextBlock i = X360Ui.Text("i", 18, Brushes.White, X360Ui.Segoe, FontWeights.Bold);
++		i.HorizontalAlignment = HorizontalAlignment.Center;
++		i.VerticalAlignment = VerticalAlignment.Center;
++		info.Children.Add(i);
++		info.At(14, 12).AddTo(box);
++		X360Ui.Text("Data Sharing", 24, Brushes.White).At(52, 10).AddTo(box);
++		TextBlock text = X360Ui.Wrapped("To enable third party games and apps through Xbox Live, we share data with the publishers. Select Learn More for details, including information about their privacy practices and how to stop sharing information with them.", 23, X360Ui.Brush(0xFF2E2E2E), 530);
++		text.LineHeight = 32;
++		text.At(22, 70).AddTo(box);
++		_dialogOptions = new Canvas();
++		_dialogOptions.At(0, 506).AddTo(box);
++		RedrawDialog();
++		Root.Children.Add(_dialog);
++	}
++
++	private void RedrawDialog()
++	{
++		if (_dialogOptions == null)
++		{
++			return;
++		}
++		_dialogOptions.Children.Clear();
++		string[] options = { "Learn More", "Continue" };
++		for (int i = 0; i < options.Length; i++)
++		{
++			X360Ui.Rect(573, 1, X360Ui.Brush(0xFFBDBDBD)).At(0, i * 47).AddTo(_dialogOptions);
++			if (i == _dialogIndex)
++			{
++				X360Ui.Rect(573, 46, X360Ui.SelectionBrush).At(0, i * 47 + 1).AddTo(_dialogOptions);
++			}
++			X360Ui.Text(options[i], 24, i == _dialogIndex ? Brushes.White : X360Ui.Brush(0xFF2E2E2E)).At(22, i * 47 + 6).AddTo(_dialogOptions);
++		}
++	}
++
++	// "<gamertag> signed in to Xbox LIVE".
++	private void ShowSignInToast()
++	{
++		Canvas toast = new Canvas();
++		toast.At(500, 598).AddTo(Root);
++		Border pill = new Border
++		{
++			Width = 300,
++			Height = 64,
++			CornerRadius = new CornerRadius(32),
++			Background = X360Ui.Vertical((0, 0xFF3A3A3A), (0.45, 0xFF151515), (1, 0xFF050505)),
++			BorderBrush = X360Ui.Brush(0xFFB4B4B4),
++			BorderThickness = new Thickness(2.5),
++			RenderTransformOrigin = new Point(0, 0.5),
++			RenderTransform = new ScaleTransform(0, 1)
++		};
++		pill.At(14, 4).AddTo(toast);
++		TextBlock text = X360Ui.Text(Gamertag + "\nsigned in to Xbox LIVE", 19, Brushes.White);
++		text.LineHeight = 24;
++		text.Opacity = 0;
++		text.At(86, 13).AddTo(toast);
++		Image orb = X360Ui.Picture(System.IO.Path.Combine("Assets", "Misc", "SignIn", "xbox-orb.png"), 72, 72, 160);
++		orb.RenderTransformOrigin = new Point(0.5, 0.5);
++		orb.RenderTransform = new ScaleTransform(0.56, 0.56);
++		orb.Opacity = 0;
++		orb.At(0, 0).AddTo(toast);
++		Play("notify-popup");
++		CubicEase ease = new CubicEase
++		{
++			EasingMode = EasingMode.EaseOut
++		};
++		orb.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(150)));
++		((ScaleTransform)orb.RenderTransform).BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(0.56, 1, TimeSpan.FromMilliseconds(260)) { EasingFunction = ease });
++		((ScaleTransform)orb.RenderTransform).BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(0.56, 1, TimeSpan.FromMilliseconds(260)) { EasingFunction = ease });
++		((ScaleTransform)pill.RenderTransform).BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(265)) { BeginTime = TimeSpan.FromMilliseconds(350), EasingFunction = ease });
++		text.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(185)) { BeginTime = TimeSpan.FromMilliseconds(670) });
++		toast.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(400)) { BeginTime = TimeSpan.FromMilliseconds(4200) });
++	}
++
++	public override void Input(DashboardInputAction action)
++	{
++		if (_dialog != null)
++		{
++			switch (action)
++			{
++				case DashboardInputAction.MoveUp when _dialogIndex > 0:
++				case DashboardInputAction.MoveDown when _dialogIndex < 1:
++					_dialogIndex = 1 - _dialogIndex;
++					Play("hover");
++					RedrawDialog();
++					break;
++				case DashboardInputAction.Activate:
++					Play("select");
++					if (_dialogIndex == 0)
++					{
++						Overlay.Navigate(new LivePanelScreen("Data Sharing", "Your profile is stored on this PC. Games and apps you play through Xenia can read your gamertag, gamer picture and achievements, the same way they did on the console. Nothing is sent to Microsoft.")
++						{
++							OnActivate = o => o.GoBack()
++						});
++					}
++					else
++					{
++						Root.Children.Remove(_dialog);
++						_dialog = null;
++					}
++					break;
++			}
++			return;
++		}
++		if (Progress)
++		{
++			return;
++		}
++		if (action == DashboardInputAction.Activate)
++		{
++			Play("select");
++			OnActivate?.Invoke(Overlay);
++		}
++		else if (action == DashboardInputAction.Back && !ContinueBar)
++		{
++			Play("back");
++			Overlay.GoBack();
++		}
++	}
++}
+diff --git a/XboxMetroLauncher/XboxMetroLauncher.Views/X360SystemOverlay.cs b/XboxMetroLauncher/XboxMetroLauncher.Views/X360SystemOverlay.cs
+new file mode 100644
+index 0000000..bc3406e
+--- /dev/null
++++ b/XboxMetroLauncher/XboxMetroLauncher.Views/X360SystemOverlay.cs
+@@ -0,0 +1,780 @@
++using System;
++using System.Collections.Generic;
++using System.Linq;
++using System.Windows;
++using System.Windows.Controls;
++using System.Windows.Input;
++using System.Windows.Media;
++using System.Windows.Media.Animation;
++using System.Windows.Shapes;
++using XboxMetroLauncher.Input;
++
++namespace XboxMetroLauncher.Views;
++
++// What the console screens need from the dashboard.
++public sealed class X360SystemHost
++{
++	public required Action<string> PlaySound { get; init; }
++
++	public required Models.AppSettings Settings { get; init; }
++
++	public required Func<Models.Profile> Profile { get; init; }
++
++	// Saves the settings and the profile.
++	public required Func<Task> SaveAsync { get; init; }
++
++	// DashX360's own settings panel.
++	public Action? OpenDashboardSettings { get; init; }
++}
++
++public sealed class X360SetupResult
++{
++	public string Gamertag { get; init; } = string.Empty;
++
++	public string GamerPicturePath { get; init; } = string.Empty;
++
++	public bool JoinedXboxLive { get; init; }
++}
++
++internal enum ScreenStyle
++{
++	Oobe,
++	OobeLive,
++	Black,
++	Gray
++}
++
++internal abstract class X360Screen
++{
++	public X360SystemOverlay Overlay { get; set; } = null!;
++
++	public Canvas Root { get; } = new Canvas
++	{
++		Width = 1280,
++		Height = 720
++	};
++
++	public virtual ScreenStyle Style => ScreenStyle.Oobe;
++
++	// Index of the highlighted initial setup step, or -1 for none.
++	public virtual int SetupTab => -1;
++
++	public virtual IReadOnlyList<(char, string)> Hints => new[] { ('A', "Select"), ('B', "Back") };
++
++	public abstract void Build();
++
++	public virtual void Input(DashboardInputAction action)
++	{
++	}
++
++	// Raw keyboard keys, for screens that accept typing.
++	public virtual bool Key(KeyEventArgs e)
++	{
++		return false;
++	}
++
++	public virtual void Shown()
++	{
++	}
++
++	public virtual void Hidden()
++	{
++	}
++
++	protected X360SystemHost Host => Overlay.Host;
++
++	protected void Play(string sound)
++	{
++		Overlay.Host.PlaySound(sound);
++	}
++}
++
++// Full-window host for the console's system screens: the first-run initial
++// setup (and profile creation) and System Settings.
++public sealed class X360SystemOverlay : Grid
++{
++	private readonly Canvas _background = new Canvas
++	{
++		Width = 1280,
++		Height = 720
++	};
++
++	private readonly Canvas _chrome = new Canvas
++	{
++		Width = 1280,
++		Height = 720
++	};
++
++	private readonly Canvas _content = new Canvas
++	{
++		Width = 1280,
++		Height = 720
++	};
++
++	private readonly Stack<X360Screen> _history = new Stack<X360Screen>();
++
++	private X360Screen? _current;
++
++	private ScreenStyle? _style;
++
++	private int _tab = -2;
++
++	private Canvas? _tabs;
++
++	private FrameworkElement? _hints;
++
++	public X360SystemOverlay(X360SystemHost host)
++	{
++		Host = host;
++		Background = Brushes.Black;
++		Visibility = Visibility.Collapsed;
++		Focusable = false;
++		Canvas stage = new Canvas
++		{
++			Width = 1280,
++			Height = 720,
++			ClipToBounds = true
++		};
++		stage.Children.Add(_background);
++		stage.Children.Add(_chrome);
++		stage.Children.Add(_content);
++		Children.Add(new Viewbox
++		{
++			Stretch = Stretch.Uniform,
++			Child = stage
++		});
++		Panel.SetZIndex(this, 5000);
++	}
++
++	internal X360SystemHost Host { get; }
++
++	public bool IsOpen => Visibility == Visibility.Visible;
++
++	public bool IsInitialSetup { get; private set; }
++
++	// Raised when the overlay closes. The result is set when the initial setup
++	// finished (with the profile that was created).
++	public event Action<X360SetupResult?>? Closed;
++
++	public void BeginInitialSetup()
++	{
++		IsInitialSetup = true;
++		_history.Clear();
++		Visibility = Visibility.Visible;
++		Navigate(new PressAScreen(), remember: false);
++	}
++
++	public void OpenSystemSettings()
++	{
++		IsInitialSetup = false;
++		_history.Clear();
++		Visibility = Visibility.Visible;
++		Navigate(SystemScreens.SystemSettings(), remember: false);
++	}
++
++	public void HandleInput(DashboardInputAction action)
++	{
++		if (action == DashboardInputAction.Guide)
++		{
++			return;
++		}
++		try
++		{
++			_current?.Input(action);
++		}
++		catch (Exception exception)
++		{
++			App.LogException(exception, "X360SystemOverlay.HandleInput");
++		}
++	}
++
++	// Keyboard: typing goes to the current screen, other keys map to
++	// controller actions.
++	public bool HandleKey(KeyEventArgs e)
++	{
++		if (_current != null && _current.Key(e))
++		{
++			return true;
++		}
++		if (DashboardInputRouter.TryMapKey(e, out DashboardInputAction action))
++		{
++			HandleInput(action);
++			return true;
++		}
++		return true;
++	}
++
++	// Shows a screen. With remember set, Back returns to the current one.
++	internal void Navigate(X360Screen screen, bool remember = true, int direction = 1)
++	{
++		if (_current != null)
++		{
++			_current.Hidden();
++			if (remember)
++			{
++				_history.Push(_current);
++			}
++		}
++		Show(screen, direction);
++	}
++
++	// Replaces the history: Back from the new screen won't return.
++	internal void Replace(X360Screen screen)
++	{
++		_history.Clear();
++		Navigate(screen, remember: false);
++	}
++
++	internal void GoBack()
++	{
++		if (_history.Count == 0)
++		{
++			if (!IsInitialSetup)
++			{
++				Close(null);
++			}
++			return;
++		}
++		_current?.Hidden();
++		Show(_history.Pop(), -1);
++	}
++
++	internal void Close(X360SetupResult? result)
++	{
++		_current?.Hidden();
++		_current = null;
++		_history.Clear();
++		_content.Children.Clear();
++		Visibility = Visibility.Collapsed;
++		IsInitialSetup = false;
++		Closed?.Invoke(result);
++	}
++
++	private void Show(X360Screen screen, int direction)
++	{
++		screen.Overlay = this;
++		if (screen.Root.Children.Count == 0)
++		{
++			screen.Build();
++		}
++		_current = screen;
++		ApplyChrome(screen);
++		_content.Children.Clear();
++		_content.Children.Add(screen.Root);
++		X360Ui.FadeIn(screen.Root, 46 * direction, 280);
++		screen.Shown();
++	}
++
++	private void ApplyChrome(X360Screen screen)
++	{
++		if (_style != screen.Style)
++		{
++			_style = screen.Style;
++			_tab = -2;
++			_tabs = null;
++			_background.Children.Clear();
++			_chrome.Children.Clear();
++			BuildBackground(screen.Style);
++			if (screen.Style == ScreenStyle.Oobe)
++			{
++				X360Ui.Logo(38).At(1052, 63).AddTo(_chrome);
++			}
++			else if (screen.Style == ScreenStyle.OobeLive)
++			{
++				X360Ui.Text("Xbox LIVE", 36, Brushes.White).At(1064, 78).AddTo(_chrome);
++			}
++		}
++		if (_tab != screen.SetupTab)
++		{
++			int previous = _tab;
++			_tab = screen.SetupTab;
++			UpdateTabs(previous);
++		}
++		if (_hints != null)
++		{
++			_chrome.Children.Remove(_hints);
++		}
++		_hints = null;
++		if (screen.Hints.Count > 0)
++		{
++			Brush brush = screen.Style == ScreenStyle.Gray ? Brushes.White : X360Ui.Brush(0xFFEDEDED);
++			(double x, double y) = screen.Style switch
++			{
++				ScreenStyle.Black => (40.0, 620.0),
++				ScreenStyle.Gray => (100.0, 676.0),
++				_ => (90.0, 683.0)
++			};
++			_hints = X360Ui.Hints(screen.Hints, brush).At(x, y);
++			_chrome.Children.Add(_hints);
++		}
++	}
++
++	private void BuildBackground(ScreenStyle style)
++	{
++		switch (style)
++		{
++			case ScreenStyle.Gray:
++				X360Ui.Rect(1280, 720, X360Ui.Vertical((0, 0xFF6E6E70), (0.45, 0xFFB4B4B6), (1, 0xFF8C8C8E))).At(0, 0).AddTo(_background);
++				X360Ui.Rect(1280, 720, new RadialGradientBrush(Color.FromArgb(0x50, 0xFF, 0xFF, 0xFF), Color.FromArgb(0, 0xFF, 0xFF, 0xFF))
++				{
++					Center = new Point(0.5, 0.35),
++					GradientOrigin = new Point(0.5, 0.35),
++					RadiusX = 0.7,
++					RadiusY = 0.6
++				}).At(0, 0).AddTo(_background);
++				break;
++			case ScreenStyle.OobeLive:
++				X360Ui.Rect(1280, 720, X360Ui.Vertical((0, 0xFF3C3C3E), (0.5, 0xFF2C2C2E), (1, 0xFF232325))).At(0, 0).AddTo(_background);
++				break;
++			default:
++				X360Ui.Rect(1280, 720, X360Ui.Brush(style == ScreenStyle.Black ? 0xFF101011 : 0xFF141416)).At(0, 0).AddTo(_background);
++				break;
++		}
++		if (style != ScreenStyle.Gray)
++		{
++			// The soft light along the top edge of the console screens.
++			X360Ui.Rect(1280, 190, X360Ui.Vertical((0, 0xC0545458), (0.35, 0x50404044), (1, 0x00141416))).At(0, 0).AddTo(_background);
++			X360Ui.Rect(1280, 720, new RadialGradientBrush(Color.FromArgb(0, 0, 0, 0), Color.FromArgb(0x70, 0, 0, 0))
++			{
++				RadiusX = 0.75,
++				RadiusY = 0.75
++			}).At(0, 0).AddTo(_background);
++		}
++	}
++
++	private static readonly string[] SetupTabs = { "language", "locale", "content controls", "network" };
++
++	private void UpdateTabs(int previous)
++	{
++		if (_tab < 0)
++		{
++			if (_tabs != null)
++			{
++				_chrome.Children.Remove(_tabs);
++				_tabs = null;
++			}
++			return;
++		}
++		if (_tabs == null)
++		{
++			_tabs = new Canvas();
++			_chrome.Children.Add(_tabs);
++		}
++		_tabs.Children.Clear();
++		double x = 0;
++		for (int i = 0; i < SetupTabs.Length; i++)
++		{
++			bool active = i == _tab;
++			TextBlock text = X360Ui.Text(SetupTabs[i], 34, active ? X360Ui.Brush(0xFFF4F4F4) : X360Ui.Brush(0xFF8C8C8C), active ? X360Ui.Segoe : X360Ui.SegoeLight, active ? FontWeights.SemiBold : FontWeights.Normal);
++			text.At(x, 0).AddTo(_tabs);
++			text.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
++			x += text.DesiredSize.Width + 41;
++		}
++		// The header row creeps left as setup advances.
++		double target = 185 - 16 * _tab;
++		Canvas.SetTop(_tabs, 104);
++		double from = previous >= 0 ? 185 - 16 * previous : target;
++		_tabs.BeginAnimation(Canvas.LeftProperty, new DoubleAnimation(from, target, TimeSpan.FromMilliseconds(300))
++		{
++			EasingFunction = new CubicEase
++			{
++				EasingMode = EasingMode.EaseOut
++			}
++		});
++	}
++}
++
++// A vertical list with the green selection bar (language, locale...).
++internal class ListScreen : X360Screen
++{
++	private readonly Canvas _rows = new Canvas();
++
++	private Border _bar = null!;
++
++	private TextBlock _up = null!;
++
++	private TextBlock _down = null!;
++
++	private int _top;
++
++	protected readonly List<string> Items;
++
++	protected int Index;
++
++	protected string Title;
++
++	protected double TextX = 188;
++
++	protected double BarX = 158;
++
++	protected double BarWidth = 600;
++
++	protected double ListY = 286;
++
++	protected double RowHeight = 61;
++
++	protected int VisibleRows = 5;
++
++	protected bool ListFocused = true;
++
++	public ListScreen(string title, IEnumerable<string> items, int index)
++	{
++		Title = title;
++		Items = items.ToList();
++		Index = Math.Clamp(index, 0, Math.Max(0, Items.Count - 1));
++	}
++
++	public Action<X360SystemOverlay, int>? Selected { get; init; }
++
++	// Evaluated when the screen is first shown.
++	public Func<X360SystemHost, int>? InitialIndex { get; init; }
++
++	public bool AllowBack { get; init; } = true;
++
++	public int Tab { get; init; } = -1;
++
++	public override int SetupTab => Tab;
++
++	public override IReadOnlyList<(char, string)> Hints => AllowBack ? new[] { ('A', "Select"), ('B', "Back") } : new[] { ('A', "Select") };
++
++	public override void Build()
++	{
++		X360Ui.Text(Title, 40, X360Ui.Brush(0xFFF2F2F2), X360Ui.SegoeLight).At(TextX, ListY - 84).AddTo(Root);
++		_bar = new Border
++		{
++			Width = BarWidth,
++			Height = RowHeight - 1,
++			Background = X360Ui.SelectionBrush
++		};
++		_bar.At(BarX, ListY).AddTo(Root);
++		Root.Children.Add(_rows);
++		_up = X360Ui.Glyph("", 13, X360Ui.Brush(0xFF7A7A7A)).At(BarX + BarWidth / 2 - 7, ListY - 22);
++		_down = X360Ui.Glyph("", 13, X360Ui.Brush(0xFF7A7A7A)).At(BarX + BarWidth / 2 - 7, ListY + VisibleRows * RowHeight + 8);
++		Root.Children.Add(_up);
++		Root.Children.Add(_down);
++		if (InitialIndex != null)
++		{
++			Index = Math.Clamp(InitialIndex(Host), 0, Math.Max(0, Items.Count - 1));
++		}
++		BuildExtras();
++		Refresh(animate: false);
++	}
++
++	protected virtual void BuildExtras()
++	{
++	}
++
++	protected virtual string ItemText(int index)
++	{
++		return Items[index];
++	}
++
++	protected void Refresh(bool animate = true)
++	{
++		if (Index < _top)
++		{
++			_top = Index;
++		}
++		if (Index >= _top + VisibleRows)
++		{
++			_top = Index - VisibleRows + 1;
++		}
++		_rows.Children.Clear();
++		for (int i = _top; i < Math.Min(Items.Count, _top + VisibleRows); i++)
++		{
++			TextBlock text = X360Ui.Text(ItemText(i), 24, X360Ui.Brush(i == Index && ListFocused ? 0xFFFFFFFF : 0xFFE6E6E6));
++			text.At(TextX, ListY + (i - _top) * RowHeight + 14).AddTo(_rows);
++		}
++		_bar.Visibility = Items.Count > 0 && ListFocused ? Visibility.Visible : Visibility.Hidden;
++		double y = ListY + (Index - _top) * RowHeight;
++		if (animate)
++		{
++			X360Ui.MoveTo(_bar, y);
++		}
++		else
++		{
++			_bar.BeginAnimation(Canvas.TopProperty, null);
++			Canvas.SetTop(_bar, y);
++		}
++		_up.Visibility = _top > 0 ? Visibility.Visible : Visibility.Hidden;
++		_down.Visibility = _top + VisibleRows < Items.Count ? Visibility.Visible : Visibility.Hidden;
++	}
++
++	public override void Input(DashboardInputAction action)
++	{
++		switch (action)
++		{
++			case DashboardInputAction.MoveUp:
++				if (ListFocused && Index > 0)
++				{
++					Index--;
++					Play("hover");
++					Refresh();
++				}
++				break;
++			case DashboardInputAction.MoveDown:
++				if (ListFocused && Index < Items.Count - 1)
++				{
++					Index++;
++					Play("hover");
++					Refresh();
++				}
++				break;
++			case DashboardInputAction.Activate:
++				if (ListFocused && Items.Count > 0)
++				{
++					Play("select");
++					Selected?.Invoke(Overlay, Index);
++				}
++				break;
++			case DashboardInputAction.Back:
++				if (AllowBack)
++				{
++					Play("back");
++					Overlay.GoBack();
++				}
++				break;
++		}
++	}
++}
++
++// "Press (A)": the green controller with the bobbing arrow.
++internal sealed class PressAScreen : X360Screen
++{
++	public override IReadOnlyList<(char, string)> Hints => Array.Empty<(char, string)>();
++
++	public override void Build()
++	{
++		Canvas pad = new Canvas
++		{
++			Width = 460,
++			Height = 310
++		};
++		pad.At(428, 228).AddTo(Root);
++		System.Windows.Shapes.Path body = new System.Windows.Shapes.Path
++		{
++			Data = Geometry.Parse("M 62,20 C 92,4 124,0 134,4 C 150,18 160,30 230,34 C 300,30 310,18 326,4 C 336,0 368,4 398,20 C 420,62 448,150 458,258 C 462,296 448,308 420,306 C 386,302 340,250 318,222 C 290,214 170,214 142,222 C 120,250 74,302 40,306 C 12,308 -2,296 2,258 C 12,150 40,62 62,20 Z"),
++			Fill = X360Ui.Vertical((0, 0xFF3DB832), (0.55, 0xFF1EA21C), (1, 0xFF0C8A14)),
++			Effect = new System.Windows.Media.Effects.DropShadowEffect
++			{
++				BlurRadius = 30,
++				ShadowDepth = 0,
++				Opacity = 0.5
++			}
++		};
++		pad.Children.Add(body);
++		// Guide button: the white orb with the green X.
++		Canvas orb = new Canvas
++		{
++			Width = 66,
++			Height = 66
++		};
++		orb.Children.Add(new Ellipse
++		{
++			Width = 66,
++			Height = 66,
++			Fill = new RadialGradientBrush(Color.FromRgb(0xFA, 0xFA, 0xFA), Color.FromRgb(0xC8, 0xC8, 0xC8))
++			{
++				GradientOrigin = new Point(0.4, 0.3)
++			}
++		});
++		orb.Children.Add(new System.Windows.Shapes.Path
++		{
++			Data = Geometry.Parse("M 14,14 C 26,18 30,26 33,30 C 36,26 40,18 52,14 C 46,24 40,30 37,33 C 42,38 48,44 52,54 C 42,46 36,40 33,37 C 30,40 24,46 14,54 C 18,44 24,38 29,33 C 26,30 20,24 14,14 Z"),
++			Fill = X360Ui.Brush(0xFF18981C)
++		});
++		orb.At(197, 62).AddTo(pad);
++		// (A) and the arrow pointing up at it.
++		Canvas press = new Canvas();
++		FrameworkElement a = X360Ui.PadButton('A', 28);
++		((Ellipse)((Grid)a).Children[0]).Fill = Brushes.White;
++		((TextBlock)((Grid)a).Children[1]).Foreground = X360Ui.Brush(0xFF18981C);
++		a.At(338, 102).AddTo(pad);
++		System.Windows.Shapes.Path arrow = new System.Windows.Shapes.Path
++		{
++			Data = Geometry.Parse("M 0,22 L 24,0 L 48,22 L 34,22 L 34,64 L 14,64 L 14,22 Z"),
++			Fill = Brushes.White,
++			Effect = new System.Windows.Media.Effects.DropShadowEffect
++			{
++				BlurRadius = 8,
++				ShadowDepth = 3,
++				Opacity = 0.35
++			}
++		};
++		press.Children.Add(arrow);
++		press.At(328, 138).AddTo(pad);
++		TranslateTransform bob = new TranslateTransform();
++		press.RenderTransform = bob;
++		bob.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(6, -8, TimeSpan.FromMilliseconds(520))
++		{
++			AutoReverse = true,
++			RepeatBehavior = RepeatBehavior.Forever,
++			EasingFunction = new SineEase
++			{
++				EasingMode = EasingMode.EaseInOut
++			}
++		});
++	}
++
++	public override void Input(DashboardInputAction action)
++	{
++		if (action == DashboardInputAction.Activate)
++		{
++			Play("select");
++			Overlay.Navigate(SetupScreens.Language(), remember: false);
++		}
++	}
++}
++
++// Generic message for a step that only needs confirming.
++internal sealed class TilesScreen : X360Screen
++{
++	private readonly List<(string Label, string? Glyph, Action<X360SystemOverlay> Action)> _tiles;
++
++	private readonly Canvas _tileLayer = new Canvas();
++
++	private int _index;
++
++	public TilesScreen(string title, string body, IEnumerable<(string, string?, Action<X360SystemOverlay>)> tiles, int tab)
++	{
++		TitleText = title;
++		BodyText = body;
++		_tiles = tiles.ToList();
++		Tab = tab;
++	}
++
++	public string TitleText { get; }
++
++	public string BodyText { get; }
++
++	public int Tab { get; }
++
++	public ScreenStyle ScreenStyle { get; init; } = ScreenStyle.Oobe;
++
++	public bool Vertical { get; init; } = true;
++
++	public double TileSize { get; init; } = 160;
++
++	public Point TileOrigin { get; init; } = new Point(803, 266);
++
++	public bool BoldTitle { get; init; }
++
++	public bool AllowBack { get; init; } = true;
++
++	public override ScreenStyle Style => ScreenStyle;
++
++	public override int SetupTab => Tab;
++
++	public override IReadOnlyList<(char, string)> Hints => AllowBack ? new[] { ('A', "Select"), ('B', "Back") } : new[] { ('A', "Select") };
++
++	public override void Build()
++	{
++		double titleY = ScreenStyle == ScreenStyle.OobeLive ? 236 : 208;
++		double x = ScreenStyle == ScreenStyle.OobeLive ? 166 : 140;
++		X360Ui.Text(TitleText, BoldTitle ? 31 : 40, X360Ui.Brush(0xFFF2F2F2), BoldTitle ? X360Ui.Segoe : X360Ui.SegoeLight, BoldTitle ? FontWeights.SemiBold : FontWeights.Normal).At(x, titleY).AddTo(Root);
++		TextBlock body = X360Ui.Wrapped(string.Empty, 22, X360Ui.Brush(0xFFEAEAEA), ScreenStyle == ScreenStyle.OobeLive ? 700 : 590);
++		X360Ui.SetMarkup(body, BodyText);
++		body.LineHeight = 34;
++		body.At(x, titleY + (BoldTitle ? 64 : 76)).AddTo(Root);
++		Root.Children.Add(_tileLayer);
++		Refresh();
++	}
++
++	private void Refresh()
++	{
++		_tileLayer.Children.Clear();
++		for (int i = 0; i < _tiles.Count; i++)
++		{
++			bool selected = i == _index;
++			double size = selected ? TileSize : TileSize - 5;
++			Border tile = X360Ui.Tile(_tiles[i].Label, size, selected, _tiles[i].Glyph);
++			double offset = (TileSize - size) / 2;
++			double tx = TileOrigin.X + (Vertical ? 0 : i * (TileSize + 4)) + offset;
++			double ty = TileOrigin.Y + (Vertical ? i * (TileSize + 2) : 0) + offset;
++			tile.At(tx, ty).AddTo(_tileLayer);
++		}
++	}
++
++	public override void Input(DashboardInputAction action)
++	{
++		int previous = _index;
++		switch (action)
++		{
++			case DashboardInputAction.MoveUp when Vertical:
++			case DashboardInputAction.MoveLeft when !Vertical:
++				_index = Math.Max(0, _index - 1);
++				break;
++			case DashboardInputAction.MoveDown when Vertical:
++			case DashboardInputAction.MoveRight when !Vertical:
++				_index = Math.Min(_tiles.Count - 1, _index + 1);
++				break;
++			case DashboardInputAction.Activate:
++				Play("select");
++				_tiles[_index].Action(Overlay);
++				return;
++			case DashboardInputAction.Back:
++				if (AllowBack)
++				{
++					Play("back");
++					Overlay.GoBack();
++				}
++				return;
++		}
++		if (previous != _index)
++		{
++			Play("hover");
++			Refresh();
++		}
++	}
++}
++
++// Centered spinner with a caption, which moves on by itself.
++internal sealed class BusyScreen : X360Screen
++{
++	private readonly string _caption;
++
++	private readonly Func<X360SystemHost, Task> _work;
++
++	private readonly Action<X360SystemOverlay> _next;
++
++	private bool _started;
++
++	public BusyScreen(string caption, Func<X360SystemHost, Task> work, Action<X360SystemOverlay> next)
++	{
++		_caption = caption;
++		_work = work;
++		_next = next;
++	}
++
++	public override IReadOnlyList<(char, string)> Hints => new[] { ('A', "Select") };
++
++	public override void Build()
++	{
++		X360Ui.Spinner(66, X360Ui.Brush(0xFFEFEFEF), 3.2).At(607, 333).AddTo(Root);
++		TextBlock caption = X360Ui.Text(_caption, 28, X360Ui.Brush(0xFFD8D8D8), X360Ui.SegoeLight);
++		caption.Width = 1280;
++		caption.TextAlignment = TextAlignment.Center;
++		caption.At(0, 446).AddTo(Root);
++	}
++
++	public override async void Shown()
++	{
++		if (_started)
++		{
++			return;
++		}
++		_started = true;
++		try
++		{
++			await Task.WhenAll(_work(Host), Task.Delay(2600));
++		}
++		catch (Exception exception)
++		{
++			App.LogException(exception, "BusyScreen");
++		}
++		if (Overlay.IsOpen)
++		{
++			_next(Overlay);
++		}
++	}
++}
+diff --git a/XboxMetroLauncher/XboxMetroLauncher.Views/X360SystemScreens.cs b/XboxMetroLauncher/XboxMetroLauncher.Views/X360SystemScreens.cs
+new file mode 100644
+index 0000000..6d55d51
+--- /dev/null
++++ b/XboxMetroLauncher/XboxMetroLauncher.Views/X360SystemScreens.cs
+@@ -0,0 +1,469 @@
++using System;
++using System.Collections.Generic;
++using System.Diagnostics;
++using System.IO;
++using System.Linq;
++using System.Reflection;
++using System.Windows;
++using System.Windows.Controls;
++using System.Windows.Media;
++using System.Windows.Shapes;
++using XboxMetroLauncher.Input;
++using XboxMetroLauncher.Services;
++
++namespace XboxMetroLauncher.Views;
++
++internal sealed class GrayItem
++{
++	public required Func<string> Label { get; init; }
++
++	public string Glyph { get; init; } = string.Empty;
++
++	// Glyph from Segoe UI instead of the icon font.
++	public bool TextGlyph { get; init; }
++
++	// White-on-transparent artwork used as the icon's shape.
++	public string? IconMask { get; init; }
++
++	public Func<string> Description { get; init; } = () => string.Empty;
++
++	public Action<X360SystemOverlay, GrayListScreen>? Activate { get; init; }
++}
++
++// The gray System Settings list: rows on the left, the selected row's
++// description on the right.
++internal sealed class GrayListScreen : X360Screen
++{
++	private const double RowHeight = 49;
++
++	private const int VisibleRows = 10;
++
++	private readonly string _title;
++
++	private readonly List<GrayItem> _items;
++
++	private readonly Canvas _rows = new Canvas();
++
++	private TextBlock _description = null!;
++
++	private int _index;
++
++	private int _top;
++
++	public GrayListScreen(string title, IEnumerable<GrayItem> items)
++	{
++		_title = title;
++		_items = items.ToList();
++	}
++
++	public override ScreenStyle Style => ScreenStyle.Gray;
++
++	public override void Build()
++	{
++		X360Ui.Text(_title, 31, Brushes.White, X360Ui.Segoe, FontWeights.SemiBold).At(100, 60).AddTo(Root);
++		X360Ui.Rect(459, 501, X360Ui.Vertical((0, 0xFFE9E9E9), (1, 0xFFD6D6D6))).At(212, 117).AddTo(Root);
++		X360Ui.Rect(460, 501, X360Ui.Vertical((0, 0xFF8A8A8C), (1, 0xFF6C6C6E))).At(671, 117).AddTo(Root);
++		Root.Children.Add(_rows);
++		_description = X360Ui.Wrapped(string.Empty, 24, X360Ui.Brush(0xFFF4F4F4), 400);
++		_description.LineHeight = 32;
++		_description.At(702, 136).AddTo(Root);
++		Redraw();
++	}
++
++	public void Redraw()
++	{
++		if (_index < _top)
++		{
++			_top = _index;
++		}
++		if (_index >= _top + VisibleRows)
++		{
++			_top = _index - VisibleRows + 1;
++		}
++		_rows.Children.Clear();
++		for (int i = _top; i < Math.Min(_items.Count, _top + VisibleRows); i++)
++		{
++			double y = 119 + (i - _top) * RowHeight;
++			bool selected = i == _index;
++			X360Ui.Rect(459, 1, X360Ui.Brush(0xFFB9B9B9)).At(212, y + RowHeight - 1).AddTo(_rows);
++			if (selected)
++			{
++				X360Ui.Rect(459, RowHeight - 1, X360Ui.SelectionBrush).At(212, y).AddTo(_rows);
++			}
++			Brush ink = selected ? Brushes.White : X360Ui.Brush(0xFF2C2C2C);
++			GrayItem item = _items[i];
++			if (item.IconMask != null)
++			{
++				new Rectangle
++				{
++					Width = 28,
++					Height = 28,
++					Fill = ink,
++					OpacityMask = new ImageBrush(X360Ui.LoadImage(item.IconMask, 64))
++					{
++						Stretch = Stretch.Uniform
++					}
++				}.At(225, y + 10).AddTo(_rows);
++			}
++			else if (item.Glyph.Length > 0)
++			{
++				TextBlock glyph = item.TextGlyph ? X360Ui.Text(item.Glyph, 28, ink, X360Ui.Segoe, FontWeights.Black) : X360Ui.Glyph(item.Glyph, 24, ink);
++				glyph.At(item.TextGlyph ? 232 : 226, y + (item.TextGlyph ? 4 : 12)).AddTo(_rows);
++			}
++			X360Ui.Text(item.Label(), 24, ink).At(263, y + 7).AddTo(_rows);
++		}
++		_description.Text = _items.Count > 0 ? _items[_index].Description() : string.Empty;
++	}
++
++	public override void Input(DashboardInputAction action)
++	{
++		switch (action)
++		{
++			case DashboardInputAction.MoveUp when _index > 0:
++				_index--;
++				Play("hover");
++				Redraw();
++				break;
++			case DashboardInputAction.MoveDown when _index < _items.Count - 1:
++				_index++;
++				Play("hover");
++				Redraw();
++				break;
++			case DashboardInputAction.Activate when _items.Count > 0:
++				if (_items[_index].Activate is { } activate)
++				{
++					Play("select");
++					activate(Overlay, this);
++				}
++				break;
++			case DashboardInputAction.Back:
++				Play("back");
++				Overlay.GoBack();
++				break;
++		}
++	}
++}
++
++internal static class SystemScreens
++{
++	public static X360Screen SystemSettings()
++	{
++		return new GrayListScreen("System Settings", new[]
++		{
++			new GrayItem
++			{
++				Label = () => "Console Settings",
++				Glyph = "!",
++				TextGlyph = true,
++				Description = () => "Change your Xbox 360 console settings, including display, audio, language, and remote control.",
++				Activate = (overlay, _) => overlay.Navigate(ConsoleSettings())
++			},
++			new GrayItem
++			{
++				Label = () => "Kinect Settings",
++				IconMask = System.IO.Path.Combine("Assets", "Misc", "SettingsIcons", "kinect.png"),
++				Description = () => "Set up and adjust your Kinect sensor, including tuning the microphone and resolving Kinect issues.",
++				Activate = (overlay, _) => overlay.Navigate(Info("Kinect Settings", "Kinect Sensor", "No Kinect sensor is connected. Connect one to set it up."))
++			},
++			new GrayItem
++			{
++				Label = () => "Storage",
++				Glyph = "",
++				Description = () => "Manage your hard drive and other storage devices, including viewing their contents.",
++				Activate = (overlay, _) => overlay.Navigate(Storage())
++			},
++			new GrayItem
++			{
++				Label = () => "Network Settings",
++				Glyph = "",
++				Description = () => "Set up your network connection, test your Xbox Live connection, and configure wireless network settings.",
++				Activate = (overlay, _) => overlay.Navigate(NetworkSettings())
++			},
++			new GrayItem
++			{
++				Label = () => "Computers",
++				Glyph = "",
++				Description = () => "Connect your console to Windows computers and share media between them.",
++				Activate = (overlay, _) => overlay.Navigate(Info("Computers", Environment.MachineName, "This console runs on " + Environment.MachineName + ". Music in your Windows Music folder plays in the Music Player."))
++			},
++			new GrayItem
++			{
++				Label = () => "TV",
++				Glyph = "",
++				Description = () => "Set up how you watch TV on your console.",
++				Activate = (overlay, _) => overlay.Navigate(Info("TV", "Live TV", "Live TV isn't available on this console. Use the Video channel to watch movies and TV shows."))
++			},
++			new GrayItem
++			{
++				Label = () => "Xbox Live Vision",
++				Glyph = "",
++				Description = () => "Adjust settings for your Xbox Live Vision camera.",
++				Activate = (overlay, _) => overlay.Navigate(Info("Xbox Live Vision", "Camera", "No Xbox Live Vision camera is connected."))
++			},
++			new GrayItem
++			{
++				Label = () => "Initial Setup",
++				Glyph = "",
++				Description = () => "Walk through initial setup again: language, locale, network and your profile. Your games and saves are kept.",
++				Activate = (overlay, _) => overlay.Navigate(new GrayListScreen("Initial Setup", new[]
++				{
++					new GrayItem
++					{
++						Label = () => "Start Initial Setup",
++						Description = () => "Set the language, locale and network again and create a new profile. Your games, saves and current profile are kept.",
++						Activate = (o, _) => o.BeginInitialSetup()
++					},
++					new GrayItem
++					{
++						Label = () => "Cancel",
++						Description = () => "Return to System Settings.",
++						Activate = (o, _) => o.GoBack()
++					}
++				}))
++			}
++		});
++	}
++
++	private static X360Screen ConsoleSettings()
++	{
++		return new GrayListScreen("Console Settings", new[]
++		{
++			new GrayItem
++			{
++				Label = () => "Display",
++				Glyph = "",
++				Description = () => "Change the screen format and full-screen mode.",
++				Activate = (overlay, _) => overlay.Navigate(Display(overlay.Host))
++			},
++			new GrayItem
++			{
++				Label = () => "Audio",
++				Glyph = "",
++				Description = () => "Change the dashboard volume and interface sounds.",
++				Activate = (overlay, _) => overlay.Navigate(Audio(overlay.Host))
++			},
++			new GrayItem
++			{
++				Label = () => "Language and Locale",
++				Glyph = "",
++				Description = () => "Choose the language games use and your locale.",
++				Activate = (overlay, _) => overlay.Navigate(LanguageAndLocale(overlay.Host))
++			},
++			new GrayItem
++			{
++				Label = () => "Clock",
++				Glyph = "",
++				Description = () => "The console clock follows Windows.\n\n" + DateTime.Now.ToString("dddd, MMMM d, yyyy\nh:mm tt") + "\n" + TimeZoneInfo.Local.DisplayName,
++				Activate = (overlay, _) => OpenWindowsSettings("ms-settings:dateandtime")
++			},
++			new GrayItem
++			{
++				Label = () => "System Info",
++				Glyph = "",
++				Description = () => "Console name: " + Environment.MachineName + "\n\nOS: " + Environment.OSVersion.VersionString + "\n\nDashboard: DashX360 " + (Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? string.Empty) + " by ZivvoZ, running Xbox 360 games with Xenia."
++			},
++			new GrayItem
++			{
++				Label = () => "Dashboard Settings",
++				Glyph = "",
++				Description = () => "DashX360's own settings: themes, tiles, startup, Steam and Spotify.",
++				Activate = (overlay, _) =>
++				{
++					overlay.Close(null);
++					overlay.Host.OpenDashboardSettings?.Invoke();
++				}
++			}
++		});
++	}
++
++	private static X360Screen Display(X360SystemHost host)
++	{
++		Models.AppSettings settings = host.Settings;
++		return new GrayListScreen("Display", new[]
++		{
++			new GrayItem
++			{
++				Label = () => "Screen Format: " + (settings.DisplayResolution == "21:9" ? "21:9 Ultra-Wide" : "16:9 Widescreen"),
++				Description = () => "Choose the shape of your screen.",
++				Activate = (overlay, screen) =>
++				{
++					settings.DisplayResolution = settings.DisplayResolution == "21:9" ? "16:9" : "21:9";
++					_ = host.SaveAsync();
++					screen.Redraw();
++				}
++			},
++			new GrayItem
++			{
++				Label = () => "Full Screen: " + (settings.StartFullscreen ? "On" : "Off"),
++				Description = () => "Fill the whole screen, like a TV, or run in a window.",
++				Activate = (overlay, screen) =>
++				{
++					settings.StartFullscreen = !settings.StartFullscreen;
++					_ = host.SaveAsync();
++					screen.Redraw();
++				}
++			}
++		});
++	}
++
++	private static X360Screen Audio(X360SystemHost host)
++	{
++		Models.AppSettings settings = host.Settings;
++		return new GrayListScreen("Audio", new[]
++		{
++			new GrayItem
++			{
++				Label = () => "Dashboard Volume: " + (int)Math.Round(settings.DashboardVolume * 100) + "%",
++				Description = () => "Select to change the volume of dashboard sounds and music.",
++				Activate = (overlay, screen) =>
++				{
++					double next = Math.Round(settings.DashboardVolume * 4) / 4 - 0.25;
++					settings.DashboardVolume = next < 0 ? 1.0 : next;
++					_ = host.SaveAsync();
++					screen.Redraw();
++				}
++			},
++			new GrayItem
++			{
++				Label = () => "Interface Sounds: " + (settings.PlayUiSounds ? "On" : "Off"),
++				Description = () => "Play sounds when you move around the dashboard and the Guide.",
++				Activate = (overlay, screen) =>
++				{
++					settings.PlayUiSounds = !settings.PlayUiSounds;
++					_ = host.SaveAsync();
++					screen.Redraw();
++				}
++			},
++			new GrayItem
++			{
++				Label = () => "Sound Theme: " + settings.DashboardSounds,
++				Description = () => "Metro uses the 2010 dashboard sounds, Blades the original 2005 ones.",
++				Activate = (overlay, screen) =>
++				{
++					settings.DashboardSounds = settings.DashboardSounds == "Blades" ? "Metro" : "Blades";
++					_ = host.SaveAsync();
++					screen.Redraw();
++				}
++			}
++		});
++	}
++
++	private static X360Screen LanguageAndLocale(X360SystemHost host)
++	{
++		Models.AppSettings settings = host.Settings;
++		return new GrayListScreen("Language and Locale", new[]
++		{
++			new GrayItem
++			{
++				Label = () => "Language: " + (string.IsNullOrEmpty(settings.ConsoleLanguage) ? "English" : settings.ConsoleLanguage),
++				Description = () => "Games that support it use this language for menus and subtitles.",
++				Activate = (overlay, screen) => overlay.Navigate(Choice("Language", SetupScreens.Languages.Select(l => l.Name), settings.ConsoleLanguage, value =>
++				{
++					settings.ConsoleLanguage = value;
++					_ = host.SaveAsync();
++				}))
++			},
++			new GrayItem
++			{
++				Label = () => "Locale: " + (string.IsNullOrEmpty(settings.ConsoleLocale) ? "United States" : settings.ConsoleLocale),
++				Description = () => "Your country or region.",
++				Activate = (overlay, screen) => overlay.Navigate(Choice("Locale", SetupScreens.Locales, settings.ConsoleLocale, value =>
++				{
++					settings.ConsoleLocale = value;
++					_ = host.SaveAsync();
++				}))
++			}
++		});
++	}
++
++	private static X360Screen Choice(string title, IEnumerable<string> values, string current, Action<string> chosen)
++	{
++		return new GrayListScreen(title, values.Select(value => new GrayItem
++		{
++			Label = () => value,
++			Glyph = value == current ? "" : string.Empty,
++			Activate = (overlay, _) =>
++			{
++				chosen(value);
++				overlay.GoBack();
++			}
++		}));
++	}
++
++	private static X360Screen Storage()
++	{
++		List<GrayItem> items = new List<GrayItem>();
++		foreach (DriveInfo drive in DriveInfo.GetDrives())
++		{
++			try
++			{
++				if (!drive.IsReady || drive.DriveType is not (DriveType.Fixed or DriveType.Removable))
++				{
++					continue;
++				}
++				string name = (drive.DriveType == DriveType.Removable ? "USB Storage Device" : "Hard Drive") + " (" + drive.Name.TrimEnd('\\') + ")";
++				double free = drive.AvailableFreeSpace / 1073741824.0;
++				double total = drive.TotalSize / 1073741824.0;
++				string label = string.IsNullOrWhiteSpace(drive.VolumeLabel) ? string.Empty : drive.VolumeLabel + "\n\n";
++				items.Add(new GrayItem
++				{
++					Label = () => name,
++					Glyph = drive.DriveType == DriveType.Removable ? "" : "",
++					Description = () => label + $"Free space: {free:0.0} GB\n\nTotal: {total:0.0} GB"
++				});
++			}
++			catch
++			{
++			}
++		}
++		return new GrayListScreen("Storage", items);
++	}
++
++	private static X360Screen NetworkSettings()
++	{
++		return new GrayListScreen("Network Settings", new[]
++		{
++			new GrayItem
++			{
++				Label = () => "Wireless Network",
++				Glyph = "",
++				Description = () => WifiService.HasWiredConnection() ? "Connected with a network cable." : (WifiService.GetConnectedNetwork() is { } network ? "Connected to " + network.Ssid + "." : "Not connected."),
++				Activate = (overlay, _) => overlay.Navigate(new NetworkScreen(null))
++			},
++			new GrayItem
++			{
++				Label = () => "Test Xbox Live Connection",
++				Glyph = "",
++				Description = () => "Test your network, Internet and Xbox Live connection.",
++				Activate = (overlay, _) => overlay.Navigate(new ConnectingScreen(null, null, null))
++			}
++		});
++	}
++
++	private static X360Screen Info(string title, string label, string description)
++	{
++		return new GrayListScreen(title, new[]
++		{
++			new GrayItem
++			{
++				Label = () => label,
++				Glyph = "",
++				Description = () => description
++			}
++		});
++	}
++
++	private static void OpenWindowsSettings(string uri)
++	{
++		try
++		{
++			Process.Start(new ProcessStartInfo(uri)
++			{
++				UseShellExecute = true
++			});
++		}
++		catch
++		{
++		}
++	}
++}
+diff --git a/XboxMetroLauncher/XboxMetroLauncher.Views/X360Ui.cs b/XboxMetroLauncher/XboxMetroLauncher.Views/X360Ui.cs
+new file mode 100644
+index 0000000..9f8e06e
+--- /dev/null
++++ b/XboxMetroLauncher/XboxMetroLauncher.Views/X360Ui.cs
+@@ -0,0 +1,437 @@
++using System;
++using System.Collections.Generic;
++using System.Windows;
++using System.Windows.Controls;
++using System.Windows.Media;
++using System.Windows.Media.Animation;
++using System.Windows.Media.Effects;
++using System.Windows.Media.Imaging;
++using System.Windows.Shapes;
++using XboxMetroLauncher.Utilities;
++
++namespace XboxMetroLauncher.Views;
++
++// Drawing helpers for the console system screens (initial setup, System
++// Settings, profile creation). Everything is laid out on a 1280x720 canvas,
++// the console's own UI resolution.
++internal static class X360Ui
++{
++	public static readonly FontFamily Segoe = new FontFamily("Segoe UI");
++
++	public static readonly FontFamily SegoeLight = new FontFamily("Segoe UI Light");
++
++	public static readonly FontFamily SegoeSemilight = new FontFamily("Segoe UI Semilight");
++
++	public static readonly FontFamily Icons = new FontFamily("Segoe MDL2 Assets");
++
++	public static readonly Color Green = Color.FromRgb(0x2C, 0x9A, 0x1C);
++
++	private static readonly Dictionary<string, ImageSource?> ImageCache = new Dictionary<string, ImageSource?>(StringComparer.OrdinalIgnoreCase);
++
++	public static SolidColorBrush Brush(uint argb)
++	{
++		SolidColorBrush brush = new SolidColorBrush(Color.FromArgb((byte)(argb >> 24), (byte)(argb >> 16), (byte)(argb >> 8), (byte)argb));
++		brush.Freeze();
++		return brush;
++	}
++
++	public static LinearGradientBrush Vertical(params (double Offset, uint Argb)[] stops)
++	{
++		LinearGradientBrush brush = new LinearGradientBrush
++		{
++			StartPoint = new Point(0, 0),
++			EndPoint = new Point(0, 1)
++		};
++		foreach ((double offset, uint argb) in stops)
++		{
++			brush.GradientStops.Add(new GradientStop(Color.FromArgb((byte)(argb >> 24), (byte)(argb >> 16), (byte)(argb >> 8), (byte)argb), offset));
++		}
++		brush.Freeze();
++		return brush;
++	}
++
++	// The green used for selected list rows and tiles.
++	public static Brush SelectionBrush { get; } = Vertical((0, 0xFF4FB82E), (0.5, 0xFF2E9A1A), (1, 0xFF1E8410));
++
++	public static Brush TileBrush { get; } = Vertical((0, 0xFF31A82A), (1, 0xFF10861A));
++
++	public static Brush TileDimBrush { get; } = Vertical((0, 0xFF1E7A1E), (1, 0xFF13641A));
++
++	public static T At<T>(this T element, double x, double y) where T : UIElement
++	{
++		Canvas.SetLeft(element, x);
++		Canvas.SetTop(element, y);
++		return element;
++	}
++
++	public static T AddTo<T>(this T element, Panel panel) where T : UIElement
++	{
++		panel.Children.Add(element);
++		return element;
++	}
++
++	public static TextBlock Text(string text, double size, Brush foreground, FontFamily? family = null, FontWeight? weight = null)
++	{
++		return new TextBlock
++		{
++			Text = text,
++			FontSize = size,
++			Foreground = foreground,
++			FontFamily = family ?? Segoe,
++			FontWeight = weight ?? FontWeights.Normal,
++			SnapsToDevicePixels = true
++		};
++	}
++
++	public static TextBlock Wrapped(string text, double size, Brush foreground, double width, FontFamily? family = null)
++	{
++		TextBlock block = Text(text, size, foreground, family);
++		block.Width = width;
++		block.TextWrapping = TextWrapping.Wrap;
++		return block;
++	}
++
++	public static TextBlock Glyph(string glyph, double size, Brush foreground)
++	{
++		return Text(glyph, size, foreground, Icons);
++	}
++
++	public static Rectangle Rect(double width, double height, Brush fill)
++	{
++		return new Rectangle
++		{
++			Width = width,
++			Height = height,
++			Fill = fill
++		};
++	}
++
++	public static ImageSource? LoadImage(string path, int decodeWidth = 0)
++	{
++		if (string.IsNullOrWhiteSpace(path))
++		{
++			return null;
++		}
++		string key = path + "|" + decodeWidth;
++		if (ImageCache.TryGetValue(key, out ImageSource? cached))
++		{
++			return cached;
++		}
++		ImageSource? image = null;
++		try
++		{
++			string full = System.IO.Path.IsPathRooted(path) ? path : AppPaths.FindFile(path);
++			if (File.Exists(full))
++			{
++				BitmapImage bitmap = new BitmapImage();
++				bitmap.BeginInit();
++				bitmap.CacheOption = BitmapCacheOption.OnLoad;
++				bitmap.UriSource = new Uri(full, UriKind.Absolute);
++				if (decodeWidth > 0)
++				{
++					bitmap.DecodePixelWidth = decodeWidth;
++				}
++				bitmap.EndInit();
++				bitmap.Freeze();
++				image = bitmap;
++			}
++		}
++		catch
++		{
++			image = null;
++		}
++		ImageCache[key] = image;
++		return image;
++	}
++
++	public static Image Picture(string path, double width, double height, int decodeWidth = 0, Stretch stretch = Stretch.UniformToFill)
++	{
++		return new Image
++		{
++			Source = LoadImage(path, decodeWidth),
++			Width = width,
++			Height = height,
++			Stretch = stretch
++		};
++	}
++
++	// Controller button glyph: a colored ball with its letter.
++	public static FrameworkElement PadButton(char letter, double size = 24)
++	{
++		uint color = letter switch
++		{
++			'A' => 0xFF5DB12F,
++			'B' => 0xFFD2402C,
++			'X' => 0xFF2C6FD0,
++			'Y' => 0xFFE8B200,
++			_ => 0xFF808080
++		};
++		Grid grid = new Grid
++		{
++			Width = size,
++			Height = size
++		};
++		grid.Children.Add(new Ellipse
++		{
++			Fill = new RadialGradientBrush(Color.FromArgb(0xFF, (byte)Math.Min(255, ((color >> 16) & 0xFF) + 40), (byte)Math.Min(255, ((color >> 8) & 0xFF) + 40), (byte)Math.Min(255, (color & 0xFF) + 40)), Color.FromArgb(0xFF, (byte)(color >> 16), (byte)(color >> 8), (byte)color))
++			{
++				GradientOrigin = new Point(0.4, 0.3)
++			}
++		});
++		grid.Children.Add(new TextBlock
++		{
++			Text = letter.ToString(),
++			FontFamily = Segoe,
++			FontWeight = FontWeights.Bold,
++			FontSize = size * 0.62,
++			Foreground = Brushes.White,
++			HorizontalAlignment = HorizontalAlignment.Center,
++			VerticalAlignment = VerticalAlignment.Center,
++			Margin = new Thickness(0, -1, 0, 0)
++		});
++		return grid;
++	}
++
++	// Footer hints such as "(A) Select  (B) Back".
++	public static StackPanel Hints(IEnumerable<(char Button, string Label)> hints, Brush foreground)
++	{
++		StackPanel panel = new StackPanel
++		{
++			Orientation = Orientation.Horizontal
++		};
++		foreach ((char button, string label) in hints)
++		{
++			FrameworkElement glyph = PadButton(button);
++			glyph.Margin = new Thickness(0, 0, 8, 0);
++			glyph.VerticalAlignment = VerticalAlignment.Center;
++			panel.Children.Add(glyph);
++			TextBlock text = Text(label, 20, foreground);
++			text.Margin = new Thickness(0, 0, 18, 0);
++			text.VerticalAlignment = VerticalAlignment.Center;
++			panel.Children.Add(text);
++		}
++		return panel;
++	}
++
++	// The busy ring used across the console UI.
++	public static FrameworkElement Spinner(double size, Brush stroke, double thickness = 3)
++	{
++		double radius = size / 2 - thickness;
++		Point start = new Point(size / 2, thickness);
++		Point end = new Point(size / 2 - radius * Math.Sin(Math.PI * 0.6), size / 2 + radius * Math.Cos(Math.PI * 0.6));
++		System.Windows.Shapes.Path arc = new System.Windows.Shapes.Path
++		{
++			Stroke = stroke,
++			StrokeThickness = thickness,
++			StrokeStartLineCap = PenLineCap.Round,
++			StrokeEndLineCap = PenLineCap.Round,
++			Data = new PathGeometry(new[]
++			{
++				new PathFigure(start, new PathSegment[] { new ArcSegment(end, new Size(radius, radius), 0, true, SweepDirection.Clockwise, true) }, false)
++			}),
++			Width = size,
++			Height = size,
++			OpacityMask = new LinearGradientBrush(Colors.Transparent, Colors.White, 45)
++		};
++		RotateTransform rotate = new RotateTransform(0, size / 2, size / 2);
++		arc.RenderTransform = rotate;
++		rotate.BeginAnimation(RotateTransform.AngleProperty, new DoubleAnimation(0, 360, TimeSpan.FromSeconds(1.1))
++		{
++			RepeatBehavior = RepeatBehavior.Forever
++		});
++		return arc;
++	}
++
++	// "XBOX 360" wordmark: the console's orb and a white logotype.
++	public static FrameworkElement Logo(double height)
++	{
++		string path = System.IO.Path.Combine("Assets", "Misc", "Xbox_360-Logo.wine.png");
++		ImageSource? source = LoadImage(path);
++		Canvas canvas = new Canvas
++		{
++			Height = height
++		};
++		if (source is not BitmapSource bitmap)
++		{
++			canvas.Children.Add(Text("XBOX 360", height * 0.8, Brushes.White, SegoeLight).At(0, 0));
++			canvas.Width = height * 4;
++			return canvas;
++		}
++		// Measured on the artwork: orb at x 348-828, logotype at x 885-2652,
++		// both within y 768-1236.
++		Int32Rect orbRect = Scale(new Int32Rect(348, 768, 480, 468), bitmap);
++		Int32Rect textRect = Scale(new Int32Rect(885, 768, 1767, 468), bitmap);
++		Image orb = new Image
++		{
++			Source = new CroppedBitmap(bitmap, orbRect),
++			Height = height,
++			Width = height * orbRect.Width / orbRect.Height
++		};
++		canvas.Children.Add(orb.At(0, 0));
++		double textWidth = height * textRect.Width / textRect.Height;
++		Rectangle text = new Rectangle
++		{
++			Width = textWidth,
++			Height = height,
++			Fill = Brushes.White,
++			OpacityMask = new ImageBrush(new CroppedBitmap(bitmap, textRect))
++		};
++		canvas.Children.Add(text.At(orb.Width + height * 0.12, 0));
++		canvas.Width = orb.Width + height * 0.12 + textWidth;
++		return canvas;
++	}
++
++	private static Int32Rect Scale(Int32Rect rect, BitmapSource bitmap)
++	{
++		double sx = bitmap.PixelWidth / 3000.0;
++		double sy = bitmap.PixelHeight / 2000.0;
++		return new Int32Rect((int)(rect.X * sx), (int)(rect.Y * sy), (int)(rect.Width * sx), (int)(rect.Height * sy));
++	}
++
++	// Tile icons, drawn with the console's heavy strokes.
++	public const string TileCross = "cross";
++
++	public const string TileCheck = "check";
++
++	public const string TileArrow = "arrow";
++
++	private static FrameworkElement TileIcon(string glyph, double size, Brush brush)
++	{
++		string? data = glyph switch
++		{
++			TileCross => "M 8,8 L 56,56 M 56,8 L 8,56",
++			TileCheck => "M 6,34 L 24,52 L 58,14",
++			TileArrow => "M 4,32 L 58,32 M 34,8 L 58,32 L 34,56",
++			_ => null
++		};
++		if (data == null)
++		{
++			return Glyph(glyph, size, brush);
++		}
++		return new System.Windows.Shapes.Path
++		{
++			Data = Geometry.Parse(data),
++			Stroke = brush,
++			StrokeThickness = glyph == TileArrow ? 7 : 9,
++			StrokeStartLineCap = PenLineCap.Square,
++			StrokeEndLineCap = PenLineCap.Square,
++			StrokeLineJoin = PenLineJoin.Miter,
++			Width = 64,
++			Height = 64,
++			Stretch = Stretch.Uniform,
++			LayoutTransform = new ScaleTransform(size / 64 * 0.8, size / 64 * 0.8)
++		};
++	}
++
++	// "**bold** text" for the few places the console emphasizes words.
++	public static void SetMarkup(TextBlock block, string markup)
++	{
++		block.Inlines.Clear();
++		string[] parts = markup.Split("**");
++		for (int i = 0; i < parts.Length; i++)
++		{
++			System.Windows.Documents.Run run = new System.Windows.Documents.Run(parts[i]);
++			if (i % 2 == 1)
++			{
++				run.FontWeight = FontWeights.SemiBold;
++			}
++			block.Inlines.Add(run);
++		}
++	}
++
++	// The silver Xbox orb (no ring), cut from the Xbox 360 logo.
++	public static FrameworkElement Orb(double size)
++	{
++		if (LoadImage(System.IO.Path.Combine("Assets", "Misc", "Xbox_360-Logo.wine.png")) is BitmapSource bitmap)
++		{
++			return new Image
++			{
++				Source = new CroppedBitmap(bitmap, Scale(new Int32Rect(348, 768, 480, 468), bitmap)),
++				Width = size,
++				Height = size,
++				Stretch = Stretch.Uniform
++			};
++		}
++		return new Ellipse
++		{
++			Width = size,
++			Height = size,
++			Fill = Brushes.Silver
++		};
++	}
++
++	// Square action tile used on the setup screens ("No", "Next", ...).
++	public static Border Tile(string label, double size, bool selected, string? glyph = null, double glyphSize = 64)
++	{
++		Grid grid = new Grid();
++		if (glyph != null)
++		{
++			FrameworkElement icon = TileIcon(glyph, glyphSize, selected ? Brushes.White : Brush(0xB0FFFFFF));
++			icon.HorizontalAlignment = HorizontalAlignment.Center;
++			icon.VerticalAlignment = VerticalAlignment.Center;
++			icon.Margin = new Thickness(0, -14, 0, 0);
++			grid.Children.Add(icon);
++		}
++		TextBlock text = Text(label, 21, selected ? Brushes.White : Brush(0xB0FFFFFF));
++		text.TextWrapping = TextWrapping.Wrap;
++		text.VerticalAlignment = VerticalAlignment.Bottom;
++		text.Margin = new Thickness(11, 0, 8, 8);
++		text.LineHeight = 26;
++		grid.Children.Add(text);
++		return new Border
++		{
++			Width = size,
++			Height = size,
++			Background = selected ? TileBrush : TileDimBrush,
++			Child = grid,
++			Effect = selected ? new DropShadowEffect
++			{
++				BlurRadius = 18,
++				ShadowDepth = 0,
++				Opacity = 0.45,
++				Color = Colors.Black
++			} : null
++		};
++	}
++
++	public static void FadeIn(UIElement element, double fromX = 0, int milliseconds = 260)
++	{
++		element.Opacity = 0;
++		TranslateTransform transform = new TranslateTransform(fromX, 0);
++		element.RenderTransform = transform;
++		CubicEase ease = new CubicEase
++		{
++			EasingMode = EasingMode.EaseOut
++		};
++		element.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(milliseconds)));
++		if (fromX != 0)
++		{
++			transform.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(fromX, 0, TimeSpan.FromMilliseconds(milliseconds))
++			{
++				EasingFunction = ease
++			});
++		}
++	}
++
++	public static void MoveTo(UIElement element, double y, int milliseconds = 110)
++	{
++		double from = Canvas.GetTop(element);
++		if (double.IsNaN(from) || Math.Abs(from - y) < 0.5)
++		{
++			Canvas.SetTop(element, y);
++			return;
++		}
++		element.BeginAnimation(Canvas.TopProperty, new DoubleAnimation(from, y, TimeSpan.FromMilliseconds(milliseconds))
++		{
++			EasingFunction = new QuadraticEase
++			{
++				EasingMode = EasingMode.EaseOut
++			}
++		});
++	}
++
++	public static string Clock()
++	{
++		return DateTime.Now.ToString("h:mm  tt", System.Globalization.CultureInfo.InvariantCulture);
++	}
++}
+diff --git a/views/tabs/AppsTabView.xaml b/views/tabs/AppsTabView.xaml
+index 220c606..a093c3a 100644
+--- a/views/tabs/AppsTabView.xaml
++++ b/views/tabs/AppsTabView.xaml
+@@ -1,4 +1,4 @@
+-<UserControl x:Class="XboxMetroLauncher.Views.Tabs.AppsTabView" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:tabs="clr-namespace:XboxMetroLauncher.Views.Tabs;assembly=DashX360">
++<UserControl x:Class="XboxMetroLauncher.Views.Tabs.AppsTabView" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:controls="clr-namespace:XboxMetroLauncher.Controls" xmlns:tabs="clr-namespace:XboxMetroLauncher.Views.Tabs;assembly=DashX360">
+   <Grid Background="#00FFFFFF" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+     <Canvas Name="DashboardCanvas" Width="1280" Height="502" ClipToBounds="False" HorizontalAlignment="Left" VerticalAlignment="Top">
+       <StackPanel Canvas.Left="-44" Canvas.Top="74" Opacity="0.72" Visibility="Collapsed">
+@@ -24,9 +24,7 @@
+           </Button>
+           <Button Canvas.Left="150" Canvas.Top="0" Width="306" Height="298" Style="{StaticResource X360TileButtonStyle}" Command="{Binding Shell.LaunchDashboardTileCommand}" CommandParameter="apps.hbogo">
+             <Grid Background="#FF000000" ClipToBounds="True">
+-              <Image Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center" Source="{Binding Shell.Settings, Converter={StaticResource DashboardTileImageSourceConverter}, ConverterParameter=apps.hbogo|Assets/Tiles/hbogoapps.jpg|512}" />
+-              <Rectangle Fill="#33000000" />
+-              <TextBlock Text="Watch with Xbox LIVE Gold" Foreground="#CCFFFFFF" FontSize="16" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,24" />
++              <controls:RotatingTile CaptionSize="18" PrimarySource="{Binding Shell.Settings, Converter={StaticResource DashboardTileImageSourceConverter}, ConverterParameter=apps.hbogo|Assets/Tiles/hbogoapps.jpg|512}" PrimaryTitle="Watch with Xbox LIVE Gold" Items="Assets/Tiles/netflixapps.png|Netflix|Instant queue;Assets/Tiles/youtubeapps.jpg|YouTube;Assets/Tiles/espn.jpg|ESPN|Live sports" />
+             </Grid>
+           </Button>
+           <Button Canvas.Left="458" Canvas.Top="0" Width="158" Height="148" Style="{StaticResource X360TileButtonStyle}" Command="{Binding Shell.LaunchDashboardTileCommand}" CommandParameter="apps.netflix">
+diff --git a/views/tabs/GamesTabView.xaml b/views/tabs/GamesTabView.xaml
+index 23e582d..f47edb9 100644
+--- a/views/tabs/GamesTabView.xaml
++++ b/views/tabs/GamesTabView.xaml
+@@ -1,4 +1,4 @@
+-<UserControl x:Class="XboxMetroLauncher.Views.Tabs.GamesTabView" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:tabs="clr-namespace:XboxMetroLauncher.Views.Tabs;assembly=DashX360">
++<UserControl x:Class="XboxMetroLauncher.Views.Tabs.GamesTabView" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:controls="clr-namespace:XboxMetroLauncher.Controls" xmlns:tabs="clr-namespace:XboxMetroLauncher.Views.Tabs;assembly=DashX360">
+   <Grid Background="#00FFFFFF" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+     <Canvas Name="DashboardCanvas" Width="1280" Height="502" ClipToBounds="False" HorizontalAlignment="Left" VerticalAlignment="Top">
+       <StackPanel Canvas.Left="-40" Canvas.Top="76" Opacity="0.48" Visibility="Collapsed">
+@@ -29,11 +29,7 @@
+               <GradientStop Color="#FF17201C" Offset="1" />
+             </LinearGradientBrush>
+           </Panel.Background>
+-          <Image Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center" Source="{Binding Shell.Settings, Converter={StaticResource DashboardTileImageSourceConverter}, ConverterParameter=games.forza|Assets/Tiles/forzahorizongames.jpg|512}" />
+-          <Rectangle Fill="#44000000" />
+-          <Rectangle Height="78" VerticalAlignment="Bottom" Fill="#8F000000" />
+-          <TextBlock Foreground="#FFFFFFFF" FontSize="24" Margin="10,0,0,42" VerticalAlignment="Bottom" Text="{Binding Shell.Settings, Converter={StaticResource DashboardTileTitleConverter}, ConverterParameter=games.forza|Forza Horizon}" />
+-          <TextBlock Foreground="#DFFFFFFF" FontSize="24" Margin="10,0,0,12" VerticalAlignment="Bottom" Text="{Binding Shell.Settings, Converter={StaticResource DashboardTileSecondaryTitleConverter}, ConverterParameter=games.forza|December IGN Pack}" />
++          <controls:RotatingTile CaptionSize="24" IncludeXbox360Games="True" PrimarySource="{Binding Shell.Settings, Converter={StaticResource DashboardTileImageSourceConverter}, ConverterParameter=games.forza|Assets/Tiles/forzahorizongames.jpg|512}" PrimaryTitle="{Binding Shell.Settings, Converter={StaticResource DashboardTileTitleConverter}, ConverterParameter=games.forza|Forza Horizon}" PrimarySubtitle="{Binding Shell.Settings, Converter={StaticResource DashboardTileSecondaryTitleConverter}, ConverterParameter=games.forza|December IGN Pack}" Items="Assets/Tiles/minecraftgames.jpg|Minecraft|Xbox 360 Edition;Assets/Tiles/blackops2games.jpg|Call of Duty: Black Ops II" />
+         </Grid>
+       </Button>
+       <Button Canvas.Left="817" Canvas.Top="74" Width="200" Height="151" Style="{StaticResource X360TileButtonStyle}" Command="{Binding Shell.LaunchDashboardTileCommand}" CommandParameter="games.minecraft">
+diff --git a/views/tabs/HomeTabView.xaml b/views/tabs/HomeTabView.xaml
+index efa166a..b16230c 100644
+--- a/views/tabs/HomeTabView.xaml
++++ b/views/tabs/HomeTabView.xaml
+@@ -1,4 +1,4 @@
+-<UserControl x:Class="XboxMetroLauncher.Views.Tabs.HomeTabView" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
++<UserControl x:Class="XboxMetroLauncher.Views.Tabs.HomeTabView" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:controls="clr-namespace:XboxMetroLauncher.Controls">
+   <Grid Background="#00FFFFFF" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+     <Canvas Name="DashboardCanvas" Width="1280" Height="502" ClipToBounds="False" HorizontalAlignment="Left" VerticalAlignment="Top">
+       <Button Canvas.Left="-2" Canvas.Top="169" Width="56" Height="56" Visibility="Collapsed" Style="{StaticResource X360TileButtonStyle}" Command="{Binding Shell.OpenSearchCommand}">
+@@ -40,18 +40,7 @@
+                 <GradientStop Color="#FF9EAEB0" Offset="1" />
+               </LinearGradientBrush>
+             </Panel.Background>
+-            <Image Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center" Source="{Binding Shell.Settings, Converter={StaticResource DashboardTileImageSourceConverter}, ConverterParameter=home.halo|Assets/Tiles/halo4home.jpg|512}" />
+-            <Rectangle>
+-              <Shape.Fill>
+-                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+-                  <GradientStop Color="#24000000" Offset="0" />
+-                  <GradientStop Color="#00000000" Offset="0.48" />
+-                  <GradientStop Color="#A8000000" Offset="1" />
+-                </LinearGradientBrush>
+-              </Shape.Fill>
+-            </Rectangle>
+-            <Rectangle Height="30" VerticalAlignment="Bottom" Fill="#C9000000" />
+-            <TextBlock FontSize="17" Foreground="#FFFFFFFF" Margin="8,0,0,6" VerticalAlignment="Bottom" Text="{Binding Shell.Settings, Converter={StaticResource DashboardTileTitleConverter}, ConverterParameter=home.halo|Halo 4}" />
++            <controls:RotatingTile CaptionSize="17" PrimarySource="{Binding Shell.Settings, Converter={StaticResource DashboardTileImageSourceConverter}, ConverterParameter=home.halo|Assets/Tiles/halo4home.jpg|512}" PrimaryTitle="{Binding Shell.Settings, Converter={StaticResource DashboardTileTitleConverter}, ConverterParameter=home.halo|Halo 4}" Items="Assets/Tiles/dexterhome.jpg|Dexter;Assets/Tiles/maroon5home.jpg|Maroon 5;Assets/Tiles/dancecentralhome.jpg|Dance Central 3;Assets/Tiles/youtubehome.jpg|YouTube;Assets/Tiles/espn.jpg|ESPN" />
+           </Grid>
+         </Button>
+         <Button Canvas.Left="187" Canvas.Top="265" Width="231" Height="133" Style="{StaticResource X360TileButtonStyle}" Command="{Binding Shell.LaunchDashboardTileCommand}" CommandParameter="home.dexter">
+diff --git a/views/tabs/MediaTabView.xaml b/views/tabs/MediaTabView.xaml
+index 43e4df0..a2d26fc 100644
+--- a/views/tabs/MediaTabView.xaml
++++ b/views/tabs/MediaTabView.xaml
+@@ -1,4 +1,4 @@
+-<UserControl x:Class="XboxMetroLauncher.Views.Tabs.MediaTabView" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:tabs="clr-namespace:XboxMetroLauncher.Views.Tabs;assembly=DashX360">
++<UserControl x:Class="XboxMetroLauncher.Views.Tabs.MediaTabView" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:controls="clr-namespace:XboxMetroLauncher.Controls" xmlns:tabs="clr-namespace:XboxMetroLauncher.Views.Tabs;assembly=DashX360">
+   <Grid Background="#00FFFFFF" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+     <Canvas Name="DashboardCanvas" Width="1280" Height="502" ClipToBounds="False" HorizontalAlignment="Left" VerticalAlignment="Top">
+       <Button Canvas.Left="236" Canvas.Top="76" Width="146" Height="148" Style="{StaticResource X360TileButtonStyle}" Command="{Binding Shell.LaunchDashboardTileCommand}" CommandParameter="video.apps">
+@@ -22,18 +22,7 @@
+               <GradientStop Color="#FF201712" Offset="1" />
+             </LinearGradientBrush>
+           </Panel.Background>
+-          <Image Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center" Source="{Binding Shell.Settings, Converter={StaticResource DashboardTileImageSourceConverter}, ConverterParameter=video.feature|Assets/Tiles/thedarkkightvideo.jpg|512}" />
+-          <Rectangle>
+-            <Shape.Fill>
+-              <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+-                <GradientStop Color="#00000000" Offset="0" />
+-                <GradientStop Color="#18000000" Offset="0.54" />
+-                <GradientStop Color="#A8000000" Offset="1" />
+-              </LinearGradientBrush>
+-            </Shape.Fill>
+-          </Rectangle>
+-          <Rectangle Height="46" VerticalAlignment="Bottom" Fill="#82000000" />
+-          <TextBlock Foreground="#FFFFFFFF" FontSize="19" Margin="12,0,0,12" VerticalAlignment="Bottom" Text="{Binding Shell.Settings, Converter={StaticResource DashboardTileTitleConverter}, ConverterParameter=video.feature|The Dark Knight}" />
++          <controls:RotatingTile CaptionSize="19" PrimarySource="{Binding Shell.Settings, Converter={StaticResource DashboardTileImageSourceConverter}, ConverterParameter=video.feature|Assets/Tiles/thedarkkightvideo.jpg|512}" PrimaryTitle="{Binding Shell.Settings, Converter={StaticResource DashboardTileTitleConverter}, ConverterParameter=video.feature|The Dark Knight}" Items="Assets/Tiles/kungfupanda2video.jpg|Kung Fu Panda 2;Assets/Tiles/cloudywithachanceofmeatballsvideo.jpg|Cloudy with a Chance of Meatballs;Assets/Tiles/hbogovideo.jpg|HBO GO" />
+         </Grid>
+       </Button>
+       <Button Canvas.Left="694" Canvas.Top="73" Width="148" Height="150" Style="{StaticResource X360TileButtonStyle}" Command="{Binding Shell.LaunchDashboardTileCommand}" CommandParameter="video.cloudy">
+diff --git a/views/tabs/MusicTabView.xaml b/views/tabs/MusicTabView.xaml
+index 0223360..db2ec3a 100644
+--- a/views/tabs/MusicTabView.xaml
++++ b/views/tabs/MusicTabView.xaml
+@@ -1,4 +1,4 @@
+-<UserControl x:Class="XboxMetroLauncher.Views.Tabs.MusicTabView" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:tabs="clr-namespace:XboxMetroLauncher.Views.Tabs;assembly=DashX360">
++<UserControl x:Class="XboxMetroLauncher.Views.Tabs.MusicTabView" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:controls="clr-namespace:XboxMetroLauncher.Controls" xmlns:tabs="clr-namespace:XboxMetroLauncher.Views.Tabs;assembly=DashX360">
+   <Grid Background="#00FFFFFF" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+     <Canvas Name="DashboardCanvas" Width="1280" Height="502" ClipToBounds="False" HorizontalAlignment="Left" VerticalAlignment="Top">
+       <Button Canvas.Left="236" Canvas.Top="76" Width="148" Height="148" Style="{StaticResource X360TileButtonStyle}" Command="{Binding Shell.LaunchDashboardTileCommand}" CommandParameter="music.player">
+@@ -22,18 +22,17 @@
+               <GradientStop Color="#FF0D0D0D" Offset="1" />
+             </LinearGradientBrush>
+           </Panel.Background>
+-          <Image Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center" Source="{Binding Shell.Settings, Converter={StaticResource DashboardTileImageSourceConverter}, ConverterParameter=music.feature|Assets/Tiles/overexposedmusic.jpg|512}" />
+-          <Rectangle Fill="#33000000" />
+-          <Rectangle Height="56" VerticalAlignment="Bottom" Fill="#A0000000" />
+-          <TextBlock Foreground="#FFFFFFFF" FontSize="23" Margin="12,0,0,24" VerticalAlignment="Bottom" Text="{Binding Shell.Settings, Converter={StaticResource DashboardTileTitleConverter}, ConverterParameter=music.feature|Overexposed}" />
+-          <TextBlock Foreground="#DFFFFFFF" FontSize="16" Margin="12,0,0,8" VerticalAlignment="Bottom" Text="{Binding Shell.Settings, Converter={StaticResource DashboardTileSecondaryTitleConverter}, ConverterParameter=music.feature|Maroon 5 - Overexposed}" />
++          <Image Width="120" Height="120" Stretch="Uniform" Opacity="0.35" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-40,0,0" Source="{Binding Source=Assets/Misc/music.png, Converter={StaticResource CropImageSourceConverter}, ConverterParameter=250;210;460;540}" />
++          <controls:RotatingTile CaptionSize="23" Interval="5" MusicFolder="True" PrimaryTitle="Your Music" />
+         </Grid>
+       </Button>
+       <Button Canvas.Left="694" Canvas.Top="76" Width="158" Height="148" Style="{StaticResource X360TileButtonStyle}" Command="{Binding Shell.LaunchDashboardTileCommand}" CommandParameter="music.recent">
+         <Grid Background="#FF2F6F9F" ClipToBounds="True">
+-          <Image Stretch="UniformToFill" RenderOptions.BitmapScalingMode="HighQuality" HorizontalAlignment="Center" VerticalAlignment="Center" Source="{Binding Shell.Settings, Converter={StaticResource DashboardTileImageSourceConverter}, ConverterParameter=music.recent|Assets/Tiles/evanescencerecent.png|256}" />
+-          <Rectangle Fill="#33000000" />
+-          <TextBlock Foreground="#FFFFFFFF" FontSize="22" Margin="10,0,0,12" VerticalAlignment="Bottom" Text="{Binding Shell.Settings, Converter={StaticResource DashboardTileTitleConverter}, ConverterParameter=music.recent|Recent Music}" />
++          <TextBlock Text="&#xE823;" FontFamily="Segoe MDL2 Assets" FontSize="46" Foreground="#C8FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-30,0,0" />
++          <StackPanel Margin="10,0,8,10" VerticalAlignment="Bottom">
++            <TextBlock Foreground="#FFFFFFFF" FontSize="22" Text="Recent Music" />
++            <TextBlock Foreground="#DFFFFFFF" FontSize="14" TextTrimming="CharacterEllipsis" Text="{Binding Shell.CurrentMusicTrack.Title, FallbackValue='Nothing played yet', TargetNullValue='Nothing played yet'}" />
++          </StackPanel>
+         </Grid>
+       </Button>
+       <Button Canvas.Left="854" Canvas.Top="76" Width="188" Height="148" Style="{StaticResource X360TileButtonStyle}" Command="{Binding Shell.LaunchDashboardTileCommand}" CommandParameter="music.search">
+@@ -41,11 +40,13 @@
+           <TextBlock Text="search" Foreground="#FFFFFFFF" FontSize="23" Margin="10,0,0,12" VerticalAlignment="Bottom" />
+         </Grid>
+       </Button>
+-      <Button Canvas.Left="694" Canvas.Top="226" Width="348" Height="148" Style="{StaticResource X360TileButtonStyle}" Command="{Binding Shell.LaunchDashboardTileCommand}" CommandParameter="music.panchiko">
+-        <Grid Background="#FFE8E8E8" ClipToBounds="True">
+-          <Image Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center" Source="{Binding Shell.Settings, Converter={StaticResource DashboardTileImageSourceConverter}, ConverterParameter=music.panchiko|Assets/Tiles/panchikomusic.jpg|384}" />
+-          <Rectangle Fill="#55FFFFFF" />
+-          <TextBlock Foreground="#FF303030" FontSize="24" Margin="14,0,0,12" VerticalAlignment="Bottom" Text="{Binding Shell.Settings, Converter={StaticResource DashboardTileTitleConverter}, ConverterParameter=music.panchiko|Panchiko}" />
++      <Button Canvas.Left="694" Canvas.Top="226" Width="348" Height="148" Style="{StaticResource X360TileButtonStyle}" Command="{Binding Shell.LaunchDashboardTileCommand}" CommandParameter="music.library">
++        <Grid Background="#FF2B2B2B" ClipToBounds="True">
++          <TextBlock Text="&#xE8D6;" FontFamily="Segoe MDL2 Assets" FontSize="52" Foreground="#C8FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-24,0,0" />
++          <StackPanel Margin="14,0,8,10" VerticalAlignment="Bottom">
++            <TextBlock Foreground="#FFFFFFFF" FontSize="24" Text="My Music" />
++            <TextBlock Foreground="#DFFFFFFF" FontSize="14" Text="Browse and play your songs" />
++          </StackPanel>
+         </Grid>
+       </Button>
+     </Canvas>
+diff --git a/views/tabs/SettingsTabView.xaml b/views/tabs/SettingsTabView.xaml
+index c789623..812b5bc 100644
+--- a/views/tabs/SettingsTabView.xaml
++++ b/views/tabs/SettingsTabView.xaml
+@@ -12,7 +12,7 @@
+             <UIElement.RenderTransform>
+               <ScaleTransform ScaleX="2.08" ScaleY="2.08" />
+             </UIElement.RenderTransform>
+-            <Button Style="{StaticResource X360TileButtonStyle}" Command="{Binding Shell.OpenLauncherSettingsCommand}">
++            <Button Style="{StaticResource X360TileButtonStyle}" Command="{Binding Shell.OpenSystemSettingsCommand}">
+               <Grid Background="{Binding Shell.DashboardTileBrush}">
+                 <Image Width="39" Height="39" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-9,0,0" Source="{Binding Source=Assets/Misc/SettingsIcons/system.png, Converter={StaticResource StringToImageSourceConverter}, ConverterParameter=96}" />
+                 <TextBlock Text="System" Foreground="#FFFFFFFF" FontSize="10" Margin="5,0,0,5" VerticalAlignment="Bottom" />
+diff --git a/views/tabs/SocialTabView.xaml b/views/tabs/SocialTabView.xaml
+index be4b975..1dd6806 100644
+--- a/views/tabs/SocialTabView.xaml
++++ b/views/tabs/SocialTabView.xaml
+@@ -10,6 +10,16 @@
+       </StackPanel>
+       <Canvas Name="HomeAlignedFrame" Canvas.Left="224" Canvas.Top="31" Width="764" Height="368" ClipToBounds="False">
+         <Canvas Name="SocialArtLayer" Left="0" Top="0" Width="764" Height="368" IsHitTestVisible="False">
++          <StackPanel Canvas.Left="211" Canvas.Top="4">
++            <TextBlock Text="{Binding Shell.Profile.Gamertag}" Foreground="#FFFFFFFF" FontFamily="Segoe UI" FontSize="29" />
++            <StackPanel Orientation="Horizontal" Margin="1,-3,0,0">
++              <TextBlock Text="{Binding Shell.Profile.Gamerscore}" Foreground="#FFFFFFFF" FontFamily="Segoe UI" FontSize="25" VerticalAlignment="Center" />
++              <Grid Width="22" Height="22" Margin="8,3,0,0" VerticalAlignment="Center">
++                <Ellipse Stroke="#FFFFFFFF" StrokeThickness="2" />
++                <TextBlock Text="G" Foreground="#FFFFFFFF" FontFamily="Segoe UI" FontSize="13" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" />
++              </Grid>
++            </StackPanel>
++          </StackPanel>
+           <Image Canvas.Left="535" Canvas.Top="78" Width="230" Height="168" Stretch="Uniform" Opacity="0.82" RenderOptions.BitmapScalingMode="HighQuality" Source="{Binding Source=Assets/Tiles/Social/join_the_fun_text.png, Converter={StaticResource CropImageSourceConverter}, ConverterParameter=294;102;782;594}" />
+           <Image Canvas.Left="219" Canvas.Top="87" Width="300" Height="256" Stretch="Uniform" Opacity="0.96" RenderOptions.BitmapScalingMode="HighQuality" Source="{Binding Source=Assets/Tiles/Social/transparent_avatars.png, Converter={StaticResource StringToImageSourceConverter}, ConverterParameter=384}" />
+         </Canvas>

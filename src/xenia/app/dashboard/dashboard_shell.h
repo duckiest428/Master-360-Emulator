@@ -11,6 +11,7 @@
 #define XENIA_APP_DASHBOARD_DASHBOARD_SHELL_H_
 
 #include <filesystem>
+#include <string>
 
 namespace xe {
 namespace app {
@@ -29,6 +30,9 @@ inline constexpr char kShellEnvLaunchedFromShell[] = "XENIA_DASHBOARD_SHELL";
 inline constexpr char kShellEnvExportOnly[] = "XENIA_DASHBOARD_EXPORT_ONLY";
 inline constexpr char kShellEnvXeniaExe[] = "XENIA_EXE";
 inline constexpr char kShellEnvLibraryJson[] = "XENIA_LIBRARY_JSON";
+// Gamertag of the profile the shell has signed in. Xenia signs the same
+// profile in (creating it on first use) so achievements count towards it.
+inline constexpr char kShellEnvGamertag[] = "XENIA_DASHBOARD_GAMERTAG";
 
 // Stores the game library folder in the config (defined with the cvar).
 void SetLibraryPath(const std::filesystem::path& path);
@@ -39,8 +43,18 @@ bool IsLaunchedFromShell();
 // The shell executable, or empty if none is installed.
 std::filesystem::path FindShellExecutable();
 
+// A file or folder that ships with the shell, or empty if it doesn't exist.
+std::filesystem::path FindShellAsset(const std::filesystem::path& relative);
+
+// Gamertag passed by the shell, or empty.
+std::string ShellGamertag();
+
 // Path of the exported library JSON under the given cache root.
 std::filesystem::path LibraryJsonPath(const std::filesystem::path& cache_root);
+
+// Path of the signed-in profile's summary (gamertag, gamerscore, per-title
+// achievement progress) that Xenia keeps up to date for the shell.
+std::filesystem::path ProfileJsonPath(const std::filesystem::path& cache_root);
 
 // Called early during startup, before any window exists. Returns true when
 // this process should exit immediately because the shell has taken over (or

@@ -16,13 +16,17 @@
 #include <initializer_list>
 #include <iterator>
 #include <numbers>
+#include <span>
 
 #include "xenia/base/filesystem.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/platform.h"
 
 #if XE_PLATFORM_WIN32
+#include "xenia/apu/xaudio2/xaudio2_api.h"
 #include "xenia/base/platform_win.h"
+
+// Needs windows.h from platform_win.h first.
 #include <playsoundapi.h>
 #endif
 
@@ -127,8 +131,8 @@ std::vector<uint8_t> SynthesizeEvent(SoundEvent event) {
       return Synthesize({{0.f, 0.07f, 1568.f, 1568.f, 0.22f},
                          {0.045f, 0.10f, 1046.f, 1000.f, 0.22f}});
     case SoundEvent::kBladeSlide:
-      return Synthesize({{0.f, 0.22f, 0.f, 0.f, 0.35f},
-                         {0.f, 0.08f, 900.f, 1300.f, 0.06f}});
+      return Synthesize(
+          {{0.f, 0.22f, 0.f, 0.f, 0.35f}, {0.f, 0.08f, 900.f, 1300.f, 0.06f}});
     case SoundEvent::kChannelChange:
       return Synthesize({{0.f, 0.16f, 0.f, 0.f, 0.25f}});
     case SoundEvent::kGuideOpen:
@@ -136,8 +140,8 @@ std::vector<uint8_t> SynthesizeEvent(SoundEvent event) {
                          {0.f, 0.12f, 784.f, 1175.f, 0.16f},
                          {0.06f, 0.16f, 1175.f, 1568.f, 0.14f}});
     case SoundEvent::kGuideClose:
-      return Synthesize({{0.f, 0.16f, 0.f, 0.f, 0.20f},
-                         {0.f, 0.14f, 1175.f, 784.f, 0.14f}});
+      return Synthesize(
+          {{0.f, 0.16f, 0.f, 0.f, 0.20f}, {0.f, 0.14f, 1175.f, 784.f, 0.14f}});
     case SoundEvent::kAchievement:
       return Synthesize({{0.f, 0.25f, 1318.f, 1318.f, 0.22f},
                          {0.09f, 0.28f, 1661.f, 1661.f, 0.22f},
@@ -153,7 +157,187 @@ std::vector<uint8_t> SynthesizeEvent(SoundEvent event) {
   return {};
 }
 
+// Console recordings as named in DashX360's Assets/Audio/Sounds.
+const char* OriginalFileName(SoundTheme theme, SoundEvent event) {
+  const bool blades = theme == SoundTheme::kBlades;
+  switch (event) {
+    case SoundEvent::kNavigate:
+      return blades ? "blades-hover.wav" : "guide-hover.wav";
+    case SoundEvent::kSelect:
+      return blades ? "blades-select.wav" : "guide-select.wav";
+    case SoundEvent::kBack:
+      return blades ? "blades-back.wav" : "guide-back.wav";
+    case SoundEvent::kChannelChange:
+      return blades ? "blades-switch-live-to-games.wav" : "tile-hover.wav";
+    case SoundEvent::kGuideOpen:
+      return blades ? "blades-guide-open.wav" : "hud-open.wav";
+    case SoundEvent::kGuideClose:
+      return blades ? "blades-guide-close.wav" : "hud-close.wav";
+    case SoundEvent::kAchievement:
+    case SoundEvent::kNotification:
+      return "notify-popup.wav";
+    case SoundEvent::kBladeSlide:  // See kBladeSlideFiles.
+    case SoundEvent::kError:       // The console has no recording for it.
+    case SoundEvent::kCount:
+      break;
+  }
+  return nullptr;
+}
+
+constexpr const char* kMetroBladeSlideFiles[] = {
+    "blade-switch-1.wav", "blade-switch-2.wav", "blade-switch-3.wav",
+    "blade-switch-4.wav"};
+constexpr const char* kBladesBladeSlideFiles[] = {
+    "blades-switch-marketplace-to-live.wav", "blades-switch-live-to-games.wav",
+    "blades-switch-games-to-media.wav", "blades-switch-media-to-system.wav"};
+
+struct WaveView {
+  const uint8_t* format = nullptr;  // PCMWAVEFORMAT
+  uint32_t format_size = 0;
+  const uint8_t* data = nullptr;
+  uint32_t data_size = 0;
+};
+
+bool ParseWave(const std::vector<uint8_t>& file, WaveView& out) {
+  if (file.size() < 12 || std::memcmp(file.data(), "RIFF", 4) ||
+      std::memcmp(file.data() + 8, "WAVE", 4)) {
+    return false;
+  }
+  size_t offset = 12;
+  while (offset + 8 <= file.size()) {
+    uint32_t size;
+    std::memcpy(&size, file.data() + offset + 4, 4);
+    const uint8_t* body = file.data() + offset + 8;
+    if (offset + 8 + size > file.size()) {
+      size = uint32_t(file.size() - offset - 8);
+    }
+    if (!std::memcmp(file.data() + offset, "fmt ", 4)) {
+      out.format = body;
+      out.format_size = size;
+    } else if (!std::memcmp(file.data() + offset, "data", 4)) {
+      out.data = body;
+      out.data_size = size;
+    }
+    offset += 8 + size + (size & 1);
+  }
+  return out.format && out.format_size >= 16 && out.data && out.data_size;
+}
+
 }  // namespace
+
+#if XE_PLATFORM_WIN32
+
+// A private XAudio2 engine so interface sounds can overlap, independent of the
+// emulated title's audio (which is paused while the Guide is open).
+class DashboardAudio::Mixer {
+ public:
+  static std::unique_ptr<Mixer> Create() {
+    auto mixer = std::unique_ptr<Mixer>(new Mixer());
+    return mixer->Initialize() ? std::move(mixer) : nullptr;
+  }
+
+  ~Mixer() {
+    for (auto& voice : voices_) {
+      voice.voice->DestroyVoice();
+    }
+    voices_.clear();
+    if (master_) {
+      master_->DestroyVoice();
+    }
+    if (engine_) {
+      engine_->Release();
+    }
+    if (module_) {
+      FreeLibrary(module_);
+    }
+  }
+
+  bool Play(std::shared_ptr<const std::vector<uint8_t>> file) {
+    Reap();
+    WaveView wave;
+    if (!ParseWave(*file, wave)) {
+      return false;
+    }
+    WAVEFORMATEX format = {};
+    std::memcpy(&format, wave.format, 16);
+    format.cbSize = 0;
+    if (format.wFormatTag != WAVE_FORMAT_PCM) {
+      return false;
+    }
+    apu::xaudio2::api::IXAudio2_8SourceVoice* voice = nullptr;
+    if (FAILED(engine_->CreateSourceVoice(&voice, &format))) {
+      return false;
+    }
+    apu::xaudio2::api::XAUDIO2_BUFFER buffer = {};
+    buffer.Flags = 0x0040;  // XAUDIO2_END_OF_STREAM
+    buffer.AudioBytes = wave.data_size;
+    buffer.pAudioData = wave.data;
+    if (FAILED(voice->SubmitSourceBuffer(&buffer)) || FAILED(voice->Start())) {
+      voice->DestroyVoice();
+      return false;
+    }
+    voices_.push_back({voice, std::move(file)});
+    return true;
+  }
+
+ private:
+  struct Voice {
+    apu::xaudio2::api::IXAudio2_8SourceVoice* voice;
+    // Keeps the samples alive until the voice is destroyed.
+    std::shared_ptr<const std::vector<uint8_t>> file;
+  };
+
+  Mixer() = default;
+
+  bool Initialize() {
+    module_ = LoadLibraryW(L"XAudio2_9.dll");
+    if (!module_) {
+      module_ = LoadLibraryW(L"XAudio2_8.dll");
+    }
+    if (!module_) {
+      return false;
+    }
+    using CreateFn =
+        HRESULT(__stdcall*)(apu::xaudio2::api::IXAudio2_8**, UINT32,
+                            apu::xaudio2::api::XAUDIO2_PROCESSOR);
+    auto create =
+        reinterpret_cast<CreateFn>(GetProcAddress(module_, "XAudio2Create"));
+    if (!create ||
+        FAILED(create(&engine_, 0,
+                      apu::xaudio2::api::XE_XAUDIO2_8_DEFAULT_PROCESSOR))) {
+      return false;
+    }
+    return SUCCEEDED(engine_->CreateMasteringVoice(&master_));
+  }
+
+  void Reap() {
+    std::erase_if(voices_, [](const Voice& voice) {
+      apu::xaudio2::api::XAUDIO2_VOICE_STATE state = {};
+      voice.voice->GetState(
+          &state, apu::xaudio2::api::XE_XAUDIO2_VOICE_NOSAMPLESPLAYED);
+      if (state.BuffersQueued) {
+        return false;
+      }
+      voice.voice->DestroyVoice();
+      return true;
+    });
+  }
+
+  HMODULE module_ = nullptr;
+  apu::xaudio2::api::IXAudio2_8* engine_ = nullptr;
+  apu::xaudio2::api::IXAudio2_8MasteringVoice* master_ = nullptr;
+  std::vector<Voice> voices_;
+};
+
+#else
+
+class DashboardAudio::Mixer {
+ public:
+  static std::unique_ptr<Mixer> Create() { return nullptr; }
+  bool Play(std::shared_ptr<const std::vector<uint8_t>>) { return false; }
+};
+
+#endif  // XE_PLATFORM_WIN32
 
 const char* DashboardAudio::EventFileName(SoundEvent event) {
   switch (event) {
@@ -183,27 +367,80 @@ const char* DashboardAudio::EventFileName(SoundEvent event) {
   return "";
 }
 
-DashboardAudio::DashboardAudio(std::filesystem::path sound_dir)
-    : sound_dir_(std::move(sound_dir)) {
+DashboardAudio::DashboardAudio(std::filesystem::path sound_dir,
+                               std::filesystem::path original_sound_dir)
+    : sound_dir_(std::move(sound_dir)),
+      original_sound_dir_(std::move(original_sound_dir)) {
+  if (!original_sound_dir_.empty()) {
+    XELOGI("Dashboard: using console interface sounds from {}",
+           xe::path_to_utf8(original_sound_dir_));
+  }
+  LoadAll();
+}
+
+DashboardAudio::~DashboardAudio() = default;
+
+void DashboardAudio::SetTheme(SoundTheme theme) {
+  std::lock_guard lock(mutex_);
+  if (theme_ == theme) {
+    return;
+  }
+  theme_ = theme;
+  LoadAll();
+}
+
+std::vector<uint8_t> DashboardAudio::ReadWave(
+    const std::filesystem::path& path) {
+  std::error_code ec;
+  if (path.empty() || !std::filesystem::is_regular_file(path, ec)) {
+    return {};
+  }
+  std::ifstream file(path, std::ios::binary);
+  std::vector<uint8_t> buffer((std::istreambuf_iterator<char>(file)),
+                              std::istreambuf_iterator<char>());
+  WaveView wave;
+  if (!ParseWave(buffer, wave)) {
+    XELOGW("Dashboard: ignoring invalid sound file {}", xe::path_to_utf8(path));
+    return {};
+  }
+  return buffer;
+}
+
+void DashboardAudio::LoadAll() {
   for (size_t i = 0; i < size_t(SoundEvent::kCount); i++) {
-    LoadOrSynthesize(SoundEvent(i));
+    Load(SoundEvent(i));
+  }
+  blade_slides_.clear();
+  next_blade_slide_ = 0;
+  if (!sounds_[size_t(SoundEvent::kBladeSlide)].empty() ||
+      original_sound_dir_.empty()) {
+    return;  // The user's own blade_slide.wav, or no console recordings.
+  }
+  for (const char* name : theme_ == SoundTheme::kBlades
+                              ? std::span(kBladesBladeSlideFiles)
+                              : std::span(kMetroBladeSlideFiles)) {
+    auto wave = ReadWave(original_sound_dir_ / name);
+    if (!wave.empty()) {
+      blade_slides_.push_back(std::move(wave));
+    }
+  }
+  if (!blade_slides_.empty()) {
+    sounds_[size_t(SoundEvent::kBladeSlide)] = blade_slides_.front();
   }
 }
 
-void DashboardAudio::LoadOrSynthesize(SoundEvent event) {
+void DashboardAudio::Load(SoundEvent event) {
   auto& buffer = sounds_[size_t(event)];
-  const auto path =
-      sound_dir_ / (std::string(EventFileName(event)) + ".wav");
-  std::error_code ec;
-  if (std::filesystem::is_regular_file(path, ec)) {
-    std::ifstream file(path, std::ios::binary);
-    buffer.assign(std::istreambuf_iterator<char>(file),
-                  std::istreambuf_iterator<char>());
-    if (buffer.size() > 44 && std::memcmp(buffer.data(), "RIFF", 4) == 0) {
+  buffer = ReadWave(sound_dir_ / (std::string(EventFileName(event)) + ".wav"));
+  if (!buffer.empty() || event == SoundEvent::kBladeSlide) {
+    return;
+  }
+  if (const char* name = OriginalFileName(theme_, event);
+      name && !original_sound_dir_.empty()) {
+    buffer = ReadWave(original_sound_dir_ / name);
+    if (!buffer.empty()) {
       return;
     }
-    XELOGW("Dashboard: ignoring invalid sound file {}",
-           xe::path_to_utf8(path));
   }
   buffer = SynthesizeEvent(event);
 }
@@ -212,12 +449,31 @@ void DashboardAudio::Play(SoundEvent event) {
   if (!enabled_ || event >= SoundEvent::kCount) {
     return;
   }
-  const auto& buffer = sounds_[size_t(event)];
-  if (buffer.empty()) {
+  std::lock_guard lock(mutex_);
+  const std::vector<uint8_t>* source = &sounds_[size_t(event)];
+  if (event == SoundEvent::kBladeSlide && !blade_slides_.empty()) {
+    source = &blade_slides_[next_blade_slide_++ % blade_slides_.size()];
+  }
+  if (source->empty()) {
+    if (event == SoundEvent::kBladeSlide) {
+      source = &(sounds_[size_t(event)] = SynthesizeEvent(event));
+    } else {
+      return;
+    }
+  }
+  // Copy into shared storage: a theme change may replace the buffers while a
+  // voice still plays the old one.
+  auto file = std::make_shared<const std::vector<uint8_t>>(*source);
+  if (!mixer_) {
+    mixer_ = Mixer::Create();
+  }
+  if (mixer_ && mixer_->Play(file)) {
     return;
   }
 #if XE_PLATFORM_WIN32
-  PlaySoundW(reinterpret_cast<LPCWSTR>(buffer.data()), nullptr,
+  // Fallback: one sound at a time. PlaySound reads the buffer asynchronously,
+  // so play from the long-lived copy.
+  PlaySoundW(reinterpret_cast<LPCWSTR>(source->data()), nullptr,
              SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
 #endif
 }

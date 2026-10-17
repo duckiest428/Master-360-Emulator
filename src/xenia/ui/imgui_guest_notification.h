@@ -59,10 +59,17 @@ class ImGuiGuestNotification : public ImGuiNotification {
 
   virtual void OnDraw(ImGuiIO& io) override {}
 
+  // Draws the console's toast: the orb pops in, a dark capsule slides out of
+  // it and shows one or two lines of text, then everything folds back.
+  // Returns false once the toast has finished.
+  bool DrawClassicToast(ImGuiIO& io, std::string_view line1,
+                        std::string_view line2);
+
   float notification_draw_progress_;
 
  private:
   NotificationStage current_stage_;
+  uint64_t toast_start_ms_ = 0;
 };
 
 class AchievementNotificationWindow final : ImGuiGuestNotification {

@@ -87,6 +87,12 @@ class ImGuiDrawer : public WindowInputListener, public UIDrawer {
     return locked_achievement_icon_.get();
   }
 
+  // Replaces the orb drawn on guest notification toasts (PNG data, for
+  // example the console's own orb). Empty restores the default icons.
+  void SetToastIconImage(std::vector<uint8_t> png);
+  // The orb for guest notification toasts.
+  ImmediateTexture* GetToastIcon(uint8_t user_index);
+
   ImFont* GetTitleFont() {
     if (!GetIO().Fonts->Fonts[1]->IsLoaded()) {
       return GetIO().Fonts->Fonts[0];
@@ -178,6 +184,8 @@ class ImGuiDrawer : public WindowInputListener, public UIDrawer {
   std::unique_ptr<ImmediateTexture> locked_achievement_icon_;
 
   std::vector<std::unique_ptr<ImmediateTexture>> notification_icon_textures_;
+  std::vector<uint8_t> toast_icon_image_;
+  std::unique_ptr<ImmediateTexture> toast_icon_texture_;
 
   // If there's an active pointer, the ImGui mouse is controlled by this touch.
   // If it's TouchEvent::kPointerIDNone, the ImGui mouse is controlled by the
