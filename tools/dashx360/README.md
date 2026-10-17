@@ -28,12 +28,23 @@ Xenia:
 - **Profile**: the profile made during setup is the one Xenia signs in when it
   runs a game, so achievements unlocked in games add to its gamerscore, which
   DashX360 shows (social channel, top right).
-- **Channels** (`RotatingTile.cs`, `views/tabs/*.xaml`): the big tiles on the
-  home, video, games and apps channels rotate through their pictures; the games
-  tile also shows the Xbox 360 games in the library. The music channel's
-  sample albums are replaced by tiles for the songs in DashX360's music folder.
-- **Guide**: Ctrl+G opens the Guide on the dashboard too (as in Xenia), and
-  DashX360's own Guide stays closed while a Xenia game runs.
+- **Channels** (`RotatingTile.cs`, `SpotlightLibrary.cs`, `views/tabs/*.xaml`):
+  the home, video and games tiles rotate through a library of about 100
+  movies, TV shows, Xbox 360 games and albums from 2006-2014. Their artwork
+  isn't shipped: DashX360 downloads each title's poster or cover from
+  Wikipedia the first time it runs online and keeps it in
+  `UserData\Spotlight`. The games channel's big tile shows your Xbox 360
+  games and starts the one on screen. The music channel's sample albums are
+  replaced by tiles for the songs in DashX360's music folder.
+- **Xbox Guide over games** (`GuideWindow.*`, `GuideViewModel.cs`,
+  `GuideStatusIndicator.cs`, `MainWindow.cs`): DashX360's own Guide is shown
+  over a game running in Xenia, opened with the controller's Guide button (or
+  Ctrl+G). The header shows the controller, its battery and the ring of
+  light. While a game runs, Games & Apps lists Achievements (that game's, from
+  Xenia), All Achievements, Awards, Recently Played, Game Marketplace and My
+  Apps; X is Sign Out and Y is Xbox Home, both with a Yes/No confirmation.
+  Gamerscore and achievements update on the dashboard as soon as Xenia
+  records them. Ctrl+G also opens the Guide on the dashboard.
 
 ## Setup
 
@@ -69,8 +80,10 @@ Xenia:
   console sounds and the Xbox orb that ship with DashX360
   (`Assets/Audio/Sounds`, `Assets/Misc/SignIn/xbox-orb.png`). Without DashX360
   they fall back to placeholder sounds and Xenia's own icons.
-- In the game the Guide button, or Ctrl+G, opens the Guide; choosing **Xbox
-  Home** (or the game exiting to the dashboard) closes Xenia so DashX360 comes
-  back.
+- In a game the Guide button, or Ctrl+G, is caught by Xenia, which asks
+  DashX360 (`XENIA_DASHBOARD_SHELL_PID`) to show its Guide through named
+  events (see `ShellGuideLink` in `src/xenia/app/dashboard/dashboard_shell.h`).
+  Xenia pauses the game while the Guide is up. **Xbox Home** closes Xenia so
+  DashX360 comes back. Without DashX360, Xenia's built-in Guide is used.
 - Set `dashboard_shell_path` to use a different front end, or `dashboard =
   false` to disable all of this.

@@ -39,6 +39,7 @@
 #include "xenia/kernel/xam/ui/title_info_ui.h"
 #include "xenia/kernel/xam/user_settings.h"
 #include "xenia/kernel/xam/xam_state.h"
+#include "xenia/kernel/xam/xdbf/gpd_info.h"
 #include "xenia/kernel/xconfig.h"
 #include "xenia/ui/file_picker.h"
 #include "xenia/ui/imgui_drawer.h"
@@ -205,6 +206,11 @@ void DashboardController::Initialize() {
 
   if (IsLaunchedFromShell()) {
     EnsureShellProfile();
+    auto link = std::make_unique<ShellGuideLink>();
+    if (link->Open()) {
+      XELOGI("Dashboard: the shell draws the Xbox Guide");
+      shell_guide_ = std::move(link);
+    }
   }
 
   // When the shell started us for a title, it owns the library and home.
@@ -416,6 +422,12 @@ void DashboardController::OnTitleLaunched() {
 // ---------------------------------------------------------------------------
 
 void DashboardController::ToggleGuide() {
+  if (shell_guide_ && shell_guide_->IsAvailable() &&
+      emulator()->is_title_open()) {
+    // The shell opens or closes its Guide; PollShellGuide follows it.
+    shell_guide_->ToggleGuide();
+    return;
+  }
   if (guide_ && !guide_->is_closing()) {
     CloseGuide();
   } else {
@@ -487,12 +499,68 @@ void DashboardController::OnGuideAnimationFinished() {
   });
 }
 
+void DashboardController::PollShellGuide() {
+  if (!shell_guide_) {
+    return;
+  }
+  auto& app_context = emulator_window_->app_context();
+  const bool visible =
+      shell_guide_->IsGuideVisible() && shell_guide_->IsAvailable();
+  if (visible != shell_guide_visible_) {
+    shell_guide_visible_ = visible;
+    app_context.CallInUIThreadDeferred([this, visible]() {
+      if (visible) {
+        OnShellGuideShown();
+      } else {
+        OnShellGuideHidden();
+      }
+    });
+  }
+  if (shell_guide_->TakeSignOutRequest()) {
+    app_context.CallInUIThreadDeferred([this]() { SignOut(0); });
+  }
+  if (shell_guide_->TakeQuitRequest()) {
+    app_context.CallInUIThreadDeferred([this]() { RestartToDashboard(); });
+  }
+}
+
+void DashboardController::OnShellGuideShown() {
+  Emulator* emu = emulator();
+  if (!emu->is_title_open()) {
+    return;
+  }
+  auto* xam = emu->kernel_state()->xam_state();
+  release_input_on_neutral_ = false;
+  emu->kernel_state()->BroadcastNotification(kXNotificationSystemUI, true);
+  xam->is_xam_dialog_present_.store(true);
+  if (cvars::guide_suspends_title && !guide_suspended_title_) {
+    guide_suspended_title_ = emu->SuspendGuestThreads();
+  }
+}
+
+void DashboardController::OnShellGuideHidden() {
+  Emulator* emu = emulator();
+  if (guide_suspended_title_) {
+    emu->ResumeGuestThreads();
+    guide_suspended_title_ = false;
+  }
+  if (!emu->is_title_open()) {
+    return;
+  }
+  emu->kernel_state()->BroadcastNotification(kXNotificationSystemUI, false);
+  // Keep the title's input blocked until the closing press is released.
+  release_input_on_neutral_ = true;
+  // Achievements earned before the Guide opened count on the dashboard.
+  ExportProfileJson();
+}
+
 void DashboardController::GuideMonitorThread() {
   xe::threading::set_name("Dashboard Guide Monitor");
   bool guide_was_down = false;
   bool combo_used = false;
   while (!quit_) {
     xe::threading::Sleep(std::chrono::milliseconds(16));
+    PollShellGuide();
     hid::InputSystem* input = emulator()->input_system();
     if (!input) {
       continue;
@@ -879,7 +947,14 @@ void DashboardController::ExportProfileJson() {
   json += fmt::format("  \"xuid\": \"{:016X}\",\n", card.xuid);
   json += fmt::format("  \"gamerscore\": {},\n", card.gamerscore);
   json += fmt::format("  \"achievements\": {},\n", card.achievements_unlocked);
+  const uint32_t running_title =
+      emulator()->is_title_open() ? emulator()->title_id() : 0;
+  json += fmt::format("  \"currentTitleId\": \"{:08X}\",\n", running_title);
   json += "  \"titles\": [";
+  auto* achievements =
+      emulator()->kernel_state()->xam_state()->achievement_manager();
+  const auto icon_root =
+      ProfileJsonPath(emulator()->cache_root()).parent_path() / "achievements";
   bool first = true;
   for (const auto& title : GetPlayedTitles(card.xuid)) {
     if (title.id == kernel::kDashboardID) {
@@ -889,10 +964,58 @@ void DashboardController::ExportProfileJson() {
     first = false;
     json += fmt::format(
         "    {{\"titleId\": \"{:08X}\", \"name\": {}, \"unlocked\": {}, "
-        "\"total\": {}, \"gamerscore\": {}, \"maxGamerscore\": {}}}",
+        "\"total\": {}, \"gamerscore\": {}, \"maxGamerscore\": {}, "
+        "\"list\": [",
         title.id, JsonString(xe::to_utf8(title.title_name)),
         title.unlocked_achievements_count, title.achievements_count,
         title.title_earned_gamerscore, title.gamerscore_amount);
+    // Each achievement, with its picture saved next to the summary.
+    bool first_achievement = true;
+    for (const auto& achievement :
+         achievements->GetTitleAchievements(card.xuid, title.id)) {
+      const auto icon_path = icon_root / fmt::format("{:08X}", title.id) /
+                             fmt::format("{}.png", achievement.image_id);
+      std::error_code ec;
+      if (!std::filesystem::exists(icon_path, ec)) {
+        const auto icon = achievements->GetAchievementIcon(
+            card.xuid, title.id, achievement.achievement_id);
+        if (!icon.empty()) {
+          std::filesystem::create_directories(icon_path.parent_path(), ec);
+          std::ofstream file(icon_path, std::ios::binary | std::ios::trunc);
+          file.write(reinterpret_cast<const char*>(icon.data()),
+                     std::streamsize(icon.size()));
+        }
+      }
+      const bool unlocked = achievement.IsUnlocked();
+      const bool secret =
+          !unlocked &&
+          !(achievement.flags &
+            uint32_t(kernel::xam::AchievementFlags::kShowUnachieved));
+      uint64_t unlock_time = 0;
+      if (unlocked && achievement.unlock_time.is_valid()) {
+        // FILETIME to Unix seconds.
+        unlock_time = ((uint64_t(achievement.unlock_time.high_part) << 32) |
+                       achievement.unlock_time.low_part) /
+                          10000000ull -
+                      11644473600ull;
+      }
+      json += first_achievement ? "\n" : ",\n";
+      first_achievement = false;
+      json += fmt::format(
+          "      {{\"id\": {}, \"name\": {}, \"description\": {}, "
+          "\"lockedDescription\": {}, \"gamerscore\": {}, \"unlocked\": {}, "
+          "\"secret\": {}, \"unlockTime\": {}, \"icon\": {}}}",
+          achievement.achievement_id,
+          JsonString(xe::to_utf8(achievement.achievement_name)),
+          JsonString(xe::to_utf8(achievement.unlocked_description)),
+          JsonString(xe::to_utf8(achievement.locked_description)),
+          achievement.gamerscore, unlocked ? "true" : "false",
+          secret ? "true" : "false", unlock_time,
+          std::filesystem::exists(icon_path, ec)
+              ? JsonString(xe::path_to_utf8(icon_path))
+              : std::string("\"\""));
+    }
+    json += first_achievement ? "]}" : "\n    ]}";
   }
   json += first ? "]\n}\n" : "\n  ]\n}\n";
 

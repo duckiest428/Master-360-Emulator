@@ -10,6 +10,7 @@
 #ifndef XENIA_APP_DASHBOARD_DASHBOARD_SHELL_H_
 #define XENIA_APP_DASHBOARD_DASHBOARD_SHELL_H_
 
+#include <cstdint>
 #include <filesystem>
 #include <string>
 
@@ -33,6 +34,41 @@ inline constexpr char kShellEnvLibraryJson[] = "XENIA_LIBRARY_JSON";
 // Gamertag of the profile the shell has signed in. Xenia signs the same
 // profile in (creating it on first use) so achievements count towards it.
 inline constexpr char kShellEnvGamertag[] = "XENIA_DASHBOARD_GAMERTAG";
+// Process ID of the shell, which draws the Xbox Guide over the title.
+inline constexpr char kShellEnvShellPid[] = "XENIA_DASHBOARD_SHELL_PID";
+
+// The shell's Xbox Guide, shown over the title. Xenia keeps the Guide button
+// and the title's pause; the shell draws the Guide and reports back through
+// named events (Local\XeniaDashboard.<xenia pid>.<name>):
+//   ToggleGuide  (auto-reset, set by Xenia) - open or close the Guide;
+//   GuideVisible (manual-reset, set by the shell) - the Guide is on screen;
+//   Quit         (auto-reset, set by the shell) - Xbox Home: close the title;
+//   SignOut      (auto-reset, set by the shell) - sign the profile out.
+class ShellGuideLink {
+ public:
+  ShellGuideLink() = default;
+  ~ShellGuideLink();
+  ShellGuideLink(const ShellGuideLink&) = delete;
+  ShellGuideLink& operator=(const ShellGuideLink&) = delete;
+
+  // Connects to the shell named by XENIA_DASHBOARD_SHELL_PID.
+  bool Open();
+  // True while the shell process is running.
+  bool IsAvailable() const;
+  void ToggleGuide();
+  bool IsGuideVisible() const;
+  // Each returns true once per request.
+  bool TakeQuitRequest();
+  bool TakeSignOutRequest();
+
+ private:
+  uint32_t shell_pid_ = 0;
+  void* shell_process_ = nullptr;
+  void* toggle_event_ = nullptr;
+  void* visible_event_ = nullptr;
+  void* quit_event_ = nullptr;
+  void* sign_out_event_ = nullptr;
+};
 
 // Stores the game library folder in the config (defined with the cvar).
 void SetLibraryPath(const std::filesystem::path& path);

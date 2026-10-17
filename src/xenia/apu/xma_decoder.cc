@@ -409,6 +409,8 @@ void XmaDecoder::Pause() {
   }
   paused_ = true;
 
+  // Wake the worker if it's idle, so it reaches the pause point.
+  work_event_->Set();
   pause_fence_.Wait();
 }
 

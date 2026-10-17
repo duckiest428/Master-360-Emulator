@@ -915,9 +915,11 @@ bool Win32Window::HandleMouse(UINT message, WPARAM wParam, LPARAM lParam,
 bool Win32Window::HandleKeyboard(
     UINT message, WPARAM wParam, LPARAM lParam,
     WindowDestructionReceiver& destruction_receiver) {
+  // The high bit of GetKeyState is whether the key is down; the low bit is
+  // its toggle state, which is only meaningful for Caps Lock.
   KeyEvent e(this, VirtualKey(wParam), lParam & 0xFFFF,
-             !!(lParam & (LPARAM(1) << 30)), !!(GetKeyState(VK_SHIFT) & 0x1),
-             !!(GetKeyState(VK_CONTROL) & 0x1), !!(GetKeyState(VK_MENU) & 0x1),
+             !!(lParam & (LPARAM(1) << 30)), GetKeyState(VK_SHIFT) < 0,
+             GetKeyState(VK_CONTROL) < 0, GetKeyState(VK_MENU) < 0,
              !!(GetKeyState(VK_CAPITAL) & 0x1));
   switch (message) {
     case WM_KEYDOWN:

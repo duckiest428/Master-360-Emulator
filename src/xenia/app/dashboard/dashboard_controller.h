@@ -40,6 +40,7 @@ namespace dashboard {
 
 class DashboardDialog;
 class GuideOverlay;
+class ShellGuideLink;
 
 enum class DashboardStyle : uint8_t {
   kNxe,     // New Xbox Experience (2008): channels of tiles.
@@ -166,6 +167,10 @@ class DashboardController {
   void OnTitleLaunched();
   void OnTitleExitRequested();
   void OnGuestNotificationShown(bool is_achievement);
+  // Shell mode: the shell draws the Guide; this follows its visibility.
+  void PollShellGuide();
+  void OnShellGuideShown();
+  void OnShellGuideHidden();
   // Shell mode: signs in the shell's profile, creating it on first use.
   void EnsureShellProfile();
   // Writes the signed-in profile's summary for the shell.
@@ -177,6 +182,9 @@ class DashboardController {
   std::unique_ptr<TextureCache> textures_;
   std::unique_ptr<DashboardDialog> dashboard_;
   std::unique_ptr<GuideOverlay> guide_;
+  std::unique_ptr<ShellGuideLink> shell_guide_;
+  // Monitor thread only.
+  bool shell_guide_visible_ = false;
 
   // Guest input stays blocked after the guide closes until every button is
   // released, so the press that closed it never reaches the title.

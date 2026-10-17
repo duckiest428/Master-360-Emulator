@@ -106,6 +106,89 @@ std::filesystem::path FindShellAsset(const std::filesystem::path& relative) {
   return std::filesystem::exists(path, ec) ? path : std::filesystem::path();
 }
 
+ShellGuideLink::~ShellGuideLink() {
+#if XE_PLATFORM_WIN32
+  for (void* handle : {shell_process_, toggle_event_, visible_event_,
+                       quit_event_, sign_out_event_}) {
+    if (handle) {
+      CloseHandle(handle);
+    }
+  }
+#endif
+}
+
+bool ShellGuideLink::Open() {
+#if XE_PLATFORM_WIN32
+  const char* pid = std::getenv(kShellEnvShellPid);
+  if (!pid || !IsLaunchedFromShell()) {
+    return false;
+  }
+  shell_pid_ = uint32_t(std::strtoul(pid, nullptr, 10));
+  if (!shell_pid_) {
+    return false;
+  }
+  shell_process_ = OpenProcess(SYNCHRONIZE, FALSE, shell_pid_);
+  if (!shell_process_) {
+    return false;
+  }
+  const std::wstring prefix =
+      L"Local\\XeniaDashboard." + std::to_wstring(GetCurrentProcessId()) + L".";
+  auto create = [&](const wchar_t* name, bool manual_reset) {
+    return CreateEventW(nullptr, manual_reset, FALSE, (prefix + name).c_str());
+  };
+  toggle_event_ = create(L"ToggleGuide", false);
+  visible_event_ = create(L"GuideVisible", true);
+  quit_event_ = create(L"Quit", false);
+  sign_out_event_ = create(L"SignOut", false);
+  return toggle_event_ && visible_event_ && quit_event_ && sign_out_event_;
+#else
+  return false;
+#endif
+}
+
+bool ShellGuideLink::IsAvailable() const {
+#if XE_PLATFORM_WIN32
+  return shell_process_ && toggle_event_ &&
+         WaitForSingleObject(shell_process_, 0) == WAIT_TIMEOUT;
+#else
+  return false;
+#endif
+}
+
+void ShellGuideLink::ToggleGuide() {
+#if XE_PLATFORM_WIN32
+  // Xenia is in the foreground; let the shell's Guide come in front of it.
+  AllowSetForegroundWindow(shell_pid_);
+  SetEvent(toggle_event_);
+#endif
+}
+
+bool ShellGuideLink::IsGuideVisible() const {
+#if XE_PLATFORM_WIN32
+  return visible_event_ &&
+         WaitForSingleObject(visible_event_, 0) == WAIT_OBJECT_0;
+#else
+  return false;
+#endif
+}
+
+bool ShellGuideLink::TakeQuitRequest() {
+#if XE_PLATFORM_WIN32
+  return quit_event_ && WaitForSingleObject(quit_event_, 0) == WAIT_OBJECT_0;
+#else
+  return false;
+#endif
+}
+
+bool ShellGuideLink::TakeSignOutRequest() {
+#if XE_PLATFORM_WIN32
+  return sign_out_event_ &&
+         WaitForSingleObject(sign_out_event_, 0) == WAIT_OBJECT_0;
+#else
+  return false;
+#endif
+}
+
 std::string ShellGamertag() {
   const char* value = std::getenv(kShellEnvGamertag);
   return value ? std::string(value) : std::string();

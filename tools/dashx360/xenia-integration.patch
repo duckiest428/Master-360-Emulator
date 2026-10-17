@@ -1,13 +1,7 @@
 diff --git a/XboxMetroLauncher/MainWindow.xaml b/XboxMetroLauncher/MainWindow.xaml
-index 210cd2d..b1116f0 100644
+index 1e8a46b..b1116f0 100644
 --- a/XboxMetroLauncher/MainWindow.xaml
 +++ b/XboxMetroLauncher/MainWindow.xaml
-@@ -1,4 +1,4 @@
--﻿<Window x:Class="XboxMetroLauncher.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:wfi="clr-namespace:System.Windows.Forms.Integration;assembly=WindowsFormsIntegration" xmlns:controls="clr-namespace:XboxMetroLauncher.Controls" Title="DashX360" Width="1280" Height="720" MinWidth="1024" MinHeight="576" Background="{StaticResource DashboardBackgroundBrush}" WindowStartupLocation="CenterScreen" xmlns:xboxmetrolauncher="clr-namespace:XboxMetroLauncher" PreviewKeyDown="Window_OnPreviewKeyDown" PreviewMouseDown="Window_OnPreviewMouseDown" PreviewMouseMove="Window_OnPreviewMouseMove" Loaded="Window_OnLoaded" Closing="Window_OnClosing">
-+<Window x:Class="XboxMetroLauncher.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:wfi="clr-namespace:System.Windows.Forms.Integration;assembly=WindowsFormsIntegration" xmlns:controls="clr-namespace:XboxMetroLauncher.Controls" Title="DashX360" Width="1280" Height="720" MinWidth="1024" MinHeight="576" Background="{StaticResource DashboardBackgroundBrush}" WindowStartupLocation="CenterScreen" xmlns:xboxmetrolauncher="clr-namespace:XboxMetroLauncher" PreviewKeyDown="Window_OnPreviewKeyDown" PreviewMouseDown="Window_OnPreviewMouseDown" PreviewMouseMove="Window_OnPreviewMouseMove" Loaded="Window_OnLoaded" Closing="Window_OnClosing">
-   <FrameworkElement.Resources>
-     <ResourceDictionary>
-       <ResourceDictionary.MergedDictionaries>
 @@ -2545,6 +2545,7 @@
                <StackPanel Margin="0,0,0,18">
                  <TextBlock Text="Add items to" Foreground="#FF333333" FontSize="15" Margin="30,12,30,0" />
@@ -17,7 +11,7 @@ index 210cd2d..b1116f0 100644
                  <Button Content="Steam Setup" Style="{StaticResource SystemSettingsOptionButtonStyle}" Tag="Steam Setup|Configure Steam Web API and profile details for richer game metadata." Command="{Binding OpenSteamSetupCommand}" GotKeyboardFocus="SettingsOption_OnFocusOrMouseEnter" MouseEnter="SettingsOption_OnFocusOrMouseEnter" />
                  <Button Content="Add Executable" Style="{StaticResource SystemSettingsOptionButtonStyle}" Tag="Add Executable|Add a local game or app executable manually." Command="{Binding AddGameCommand}" GotKeyboardFocus="SettingsOption_OnFocusOrMouseEnter" MouseEnter="SettingsOption_OnFocusOrMouseEnter" />
 diff --git a/XboxMetroLauncher/XboxMetroLauncher/MainWindow.cs b/XboxMetroLauncher/XboxMetroLauncher/MainWindow.cs
-index 9fe880a..d655296 100644
+index 9fe880a..12bbe01 100644
 --- a/XboxMetroLauncher/XboxMetroLauncher/MainWindow.cs
 +++ b/XboxMetroLauncher/XboxMetroLauncher/MainWindow.cs
 @@ -136,6 +136,12 @@ public partial class MainWindow : Window
@@ -33,15 +27,16 @@ index 9fe880a..d655296 100644
  	private GuideViewModel? _guideViewModel;
  
  	private UIElement? _guideReturnFocusElement;
-@@ -255,6 +261,7 @@ public partial class MainWindow : Window
+@@ -255,6 +261,8 @@ public partial class MainWindow : Window
  		_viewModel.PartyOverlayRequested += ViewModel_OnPartyOverlayRequested;
  		_viewModel.AchievementOverlayRequested += ViewModel_OnAchievementOverlayRequested;
  		_viewModel.ToastRequested += ViewModel_OnToastRequested;
 +		_viewModel.SystemSettingsRequested += ShowSystemSettings;
++		XeniaIntegration.GuideToggleRequested += XeniaGuide_OnToggleRequested;
  		ApplyDisplaySettings();
  	}
  
-@@ -318,7 +325,7 @@ public partial class MainWindow : Window
+@@ -318,7 +326,7 @@ public partial class MainWindow : Window
  			UpdateAdjacentPreviewSnapshots();
  			WritePerformanceDebugReport();
  			_startupInitializationComplete = true;
@@ -50,7 +45,7 @@ index 9fe880a..d655296 100644
  			{
  				PlayStartupSound();
  				ScheduleStartupPrewarm();
-@@ -469,6 +476,10 @@ public partial class MainWindow : Window
+@@ -469,6 +477,10 @@ public partial class MainWindow : Window
  			SkipBootIntro(userInitiated: true);
  			e.Handled = true;
  		}
@@ -61,7 +56,7 @@ index 9fe880a..d655296 100644
  		else if (DashboardInputRouter.TryMapKey(e, out action))
  		{
  			e.Handled = true;
-@@ -525,6 +536,14 @@ public partial class MainWindow : Window
+@@ -525,6 +537,14 @@ public partial class MainWindow : Window
  	private void HandleControllerInputAction(DashboardInputAction action)
  	{
  		HideMouseCursorForController();
@@ -76,7 +71,18 @@ index 9fe880a..d655296 100644
  		if (TryRouteInputToGuide(action))
  		{
  			return;
-@@ -641,6 +660,11 @@ public partial class MainWindow : Window
+@@ -560,6 +580,10 @@ public partial class MainWindow : Window
+ 
+ 	private bool TryRouteInputToGuide(DashboardInputAction action)
+ 	{
++		if (action == DashboardInputAction.Guide && XeniaIntegration.IsXeniaGameRunning)
++		{
++			return true;
++		}
+ 		try
+ 		{
+ 			IGuideWindow? guideWindow = _guideWindow;
+@@ -641,6 +665,11 @@ public partial class MainWindow : Window
  		}
  		if (action == DashboardInputAction.Guide)
  		{
@@ -88,7 +94,53 @@ index 9fe880a..d655296 100644
  			if (TryHandleActiveToastAction())
  			{
  				return;
-@@ -1240,6 +1264,64 @@ public partial class MainWindow : Window
+@@ -850,6 +879,8 @@ public partial class MainWindow : Window
+ 				RememberGuideReturnFocus();
+ 				_audioService.Play("guide-open");
+ 				_guideWindow.Open();
++				// Xenia pauses the game while the Guide is over it.
++				XeniaIntegration.SetGuideVisible(XeniaIntegration.IsXeniaGameRunning);
+ 			}
+ 		}
+ 		catch (InvalidOperationException)
+@@ -1005,6 +1036,23 @@ public partial class MainWindow : Window
+ 		}
+ 	}
+ 
++	// The Guide button (or Ctrl+G) pressed in a game running in Xenia.
++	private void XeniaGuide_OnToggleRequested()
++	{
++		if (!XeniaIntegration.IsXeniaGameRunning)
++		{
++			return;
++		}
++		if (_guideWindow != null && _guideWindow.IsGuideOpen)
++		{
++			HideGuide();
++		}
++		else
++		{
++			ShowGuide();
++		}
++	}
++
+ 	private void HideGuide()
+ 	{
+ 		try
+@@ -1156,6 +1204,12 @@ public partial class MainWindow : Window
+ 
+ 	private void GuideWindow_OnHiddenCompleted(object? sender, EventArgs e)
+ 	{
++		XeniaIntegration.SetGuideVisible(false);
++		if (XeniaIntegration.IsXeniaGameRunning)
++		{
++			PrepareGuideReturnToDashboard();
++			return;
++		}
+ 		if (sender is BladesGuideWindow && WindowState == WindowState.Minimized) return;
+ 		if (_guideRestoreExternalWindow && RestoreExternalWindowAfterGuide())
+ 		{
+@@ -1240,6 +1294,64 @@ public partial class MainWindow : Window
  		_restoreFocusAfterGuideClose = false;
  	}
  
@@ -153,7 +205,20 @@ index 9fe880a..d655296 100644
  	private void StartBootVideo()
  	{
  		bool useBladesStartup = ShouldUseBladesStartupVideoAudio();
-@@ -1498,8 +1580,10 @@ public partial class MainWindow : Window
+@@ -1380,6 +1492,12 @@ public partial class MainWindow : Window
+ 		try
+ 		{
+ 			WarmUpGuideAudio();
++			// Build the Guide ahead of time so it opens instantly over a game.
++			EnsureGuideWindow();
++			if (_guideWindow is GuideWindow guideWindow)
++			{
++				guideWindow.Prewarm();
++			}
+ 		}
+ 		catch (Exception exception)
+ 		{
+@@ -1498,8 +1616,10 @@ public partial class MainWindow : Window
  		{
  			text = "Player";
  		}
@@ -166,7 +231,7 @@ index 9fe880a..d655296 100644
  	}
  
  	private void PlayBootIntroSound()
-@@ -1562,6 +1646,17 @@ public partial class MainWindow : Window
+@@ -1562,6 +1682,17 @@ public partial class MainWindow : Window
  				_audioService.Stop("startup");
  				CleanupBootBrowser();
  			}
@@ -184,12 +249,149 @@ index 9fe880a..d655296 100644
  			bool num = StartFakeLoadingIfReady(bootHandoff: true);
  			if (!userInitiated)
  			{
+diff --git a/XboxMetroLauncher/XboxMetroLauncher.Controls/GuideStatusIndicator.cs b/XboxMetroLauncher/XboxMetroLauncher.Controls/GuideStatusIndicator.cs
+new file mode 100644
+index 0000000..4eddb98
+--- /dev/null
++++ b/XboxMetroLauncher/XboxMetroLauncher.Controls/GuideStatusIndicator.cs
+@@ -0,0 +1,131 @@
++using System;
++using System.Runtime.InteropServices;
++using System.Windows;
++using System.Windows.Media;
++using System.Windows.Threading;
++
++namespace XboxMetroLauncher.Controls;
++
++// The Guide header's controller status: the controller, its battery (from
++// XInput: full for a wired controller) and the ring of light with the
++// player's quadrant lit.
++public sealed class GuideStatusIndicator : FrameworkElement
++{
++	private const byte BatteryTypeDisconnected = 0;
++
++	private const byte BatteryTypeWired = 1;
++
++	private static readonly Brush Ink = Frozen(new SolidColorBrush(Color.FromRgb(0xD8, 0xDD, 0xE2)));
++
++	private static readonly Brush DimInk = Frozen(new SolidColorBrush(Color.FromArgb(0x70, 0xD8, 0xDD, 0xE2)));
++
++	private static readonly Pen RingPen = FrozenPen(new Pen(Ink, 2.0));
++
++	private static readonly Pen PlayerPen = FrozenPen(new Pen(Frozen(new SolidColorBrush(Color.FromRgb(0x7F, 0xC8, 0x2D))), 2.5));
++
++	private static readonly Pen BatteryPen = FrozenPen(new Pen(Ink, 1.5));
++
++	private readonly DispatcherTimer _timer = new DispatcherTimer
++	{
++		Interval = TimeSpan.FromSeconds(5)
++	};
++
++	private int _bars = -1;
++
++	public GuideStatusIndicator()
++	{
++		Width = 100;
++		Height = 22;
++		_timer.Tick += (_, _) => Refresh();
++		Loaded += (_, _) =>
++		{
++			Refresh();
++			_timer.Start();
++		};
++		Unloaded += (_, _) => _timer.Stop();
++	}
++
++	private void Refresh()
++	{
++		int bars = ReadBatteryBars();
++		if (bars != _bars)
++		{
++			_bars = bars;
++			InvalidateVisual();
++		}
++	}
++
++	// 0-4 filled bars, or -1 with no controller connected.
++	private static int ReadBatteryBars()
++	{
++		try
++		{
++			if (XInputGetBatteryInformation(0, 0, out XInputBatteryInformation info) != 0 || info.BatteryType == BatteryTypeDisconnected)
++			{
++				return -1;
++			}
++			return info.BatteryType == BatteryTypeWired ? 4 : Math.Clamp(info.BatteryLevel + 1, 1, 4);
++		}
++		catch (Exception exception) when (exception is DllNotFoundException or EntryPointNotFoundException)
++		{
++			return 4;
++		}
++	}
++
++	protected override void OnRender(DrawingContext dc)
++	{
++		bool connected = _bars >= 0;
++		Brush body = connected ? Ink : DimInk;
++		// Controller.
++		dc.DrawRoundedRectangle(body, null, new Rect(8, 5, 20, 12), 5, 5);
++		// Battery and its bars.
++		dc.DrawRectangle(null, BatteryPen, new Rect(32, 5, 26, 12));
++		dc.DrawRectangle(body, null, new Rect(58, 8, 2, 6));
++		for (int i = 0; i < Math.Max(0, _bars); i++)
++		{
++			dc.DrawRectangle(Ink, null, new Rect(34 + i * 6, 7, 4, 8));
++		}
++		// Ring of light, player one lit.
++		Point center = new Point(82, 11);
++		dc.DrawGeometry(null, RingPen, Arc(center, 10, 0.6, 5.3));
++		dc.DrawGeometry(null, PlayerPen, Arc(center, 10, -0.9, 0.4));
++	}
++
++	private static Geometry Arc(Point center, double radius, double from, double to)
++	{
++		Point start = new Point(center.X + radius * Math.Cos(from), center.Y + radius * Math.Sin(from));
++		Point end = new Point(center.X + radius * Math.Cos(to), center.Y + radius * Math.Sin(to));
++		StreamGeometry geometry = new StreamGeometry();
++		using (StreamGeometryContext context = geometry.Open())
++		{
++			context.BeginFigure(start, false, false);
++			context.ArcTo(end, new Size(radius, radius), 0, to - from > Math.PI, SweepDirection.Clockwise, true, false);
++		}
++		geometry.Freeze();
++		return geometry;
++	}
++
++	private static Brush Frozen(Brush brush)
++	{
++		brush.Freeze();
++		return brush;
++	}
++
++	private static Pen FrozenPen(Pen pen)
++	{
++		pen.StartLineCap = PenLineCap.Flat;
++		pen.Freeze();
++		return pen;
++	}
++
++	[StructLayout(LayoutKind.Sequential)]
++	private struct XInputBatteryInformation
++	{
++		public byte BatteryType;
++
++		public byte BatteryLevel;
++	}
++
++	[DllImport("xinput1_4.dll")]
++	private static extern uint XInputGetBatteryInformation(uint userIndex, byte devType, out XInputBatteryInformation batteryInformation);
++}
 diff --git a/XboxMetroLauncher/XboxMetroLauncher.Controls/RotatingTile.cs b/XboxMetroLauncher/XboxMetroLauncher.Controls/RotatingTile.cs
 new file mode 100644
-index 0000000..7d4f31d
+index 0000000..aa7a879
 --- /dev/null
 +++ b/XboxMetroLauncher/XboxMetroLauncher.Controls/RotatingTile.cs
-@@ -0,0 +1,367 @@
+@@ -0,0 +1,452 @@
 +using System;
 +using System.Collections.Generic;
 +using System.IO;
@@ -209,9 +411,10 @@ index 0000000..7d4f31d
 +// few seconds the next picture slides up into place with its caption.
 +//
 +// Slides come from, in order: PrimarySource/PrimaryTitle (the tile's own,
-+// possibly customized, art), Items ("path|title|subtitle;..."), and, when
-+// IncludeXbox360Games is set, the covers of the Xbox 360 games in the library.
-+// With MusicFolder set, the slides are the songs in DashX360's music folder.
++// possibly customized, art), Items ("path|title|subtitle;..."), the Xbox 360
++// games in the library (IncludeXbox360Games) and the era spotlight library
++// (Spotlight="movie,tv,..."). With MusicFolder set, the slides are the songs
++// in DashX360's music folder.
 +public sealed class RotatingTile : Grid
 +{
 +	public static readonly DependencyProperty PrimarySourceProperty = DependencyProperty.Register(nameof(PrimarySource), typeof(ImageSource), typeof(RotatingTile), new PropertyMetadata(null, OnSlidesChanged));
@@ -224,6 +427,10 @@ index 0000000..7d4f31d
 +
 +	public static readonly DependencyProperty IncludeXbox360GamesProperty = DependencyProperty.Register(nameof(IncludeXbox360Games), typeof(bool), typeof(RotatingTile), new PropertyMetadata(false, OnSlidesChanged));
 +
++	public static readonly DependencyProperty SpotlightProperty = DependencyProperty.Register(nameof(Spotlight), typeof(string), typeof(RotatingTile), new PropertyMetadata(string.Empty, OnSlidesChanged));
++
++	public static readonly DependencyProperty SpotlightOffsetProperty = DependencyProperty.Register(nameof(SpotlightOffset), typeof(int), typeof(RotatingTile), new PropertyMetadata(0, OnSlidesChanged));
++
 +	public static readonly DependencyProperty MusicFolderProperty = DependencyProperty.Register(nameof(MusicFolder), typeof(bool), typeof(RotatingTile), new PropertyMetadata(false, OnSlidesChanged));
 +
 +	public static readonly DependencyProperty IntervalProperty = DependencyProperty.Register(nameof(Interval), typeof(double), typeof(RotatingTile), new PropertyMetadata(7.0));
@@ -231,6 +438,10 @@ index 0000000..7d4f31d
 +	public static readonly DependencyProperty CaptionSizeProperty = DependencyProperty.Register(nameof(CaptionSize), typeof(double), typeof(RotatingTile), new PropertyMetadata(19.0));
 +
 +	public static readonly DependencyProperty DecodeWidthProperty = DependencyProperty.Register(nameof(DecodeWidth), typeof(int), typeof(RotatingTile), new PropertyMetadata(512));
++
++	// Library ID of the game on screen, empty for anything else; the tile's
++	// button launches it.
++	public static readonly DependencyProperty CurrentKeyProperty = DependencyProperty.Register(nameof(CurrentKey), typeof(string), typeof(RotatingTile), new PropertyMetadata(string.Empty));
 +
 +	private static readonly Random Stagger = new Random();
 +
@@ -244,8 +455,18 @@ index 0000000..7d4f31d
 +
 +	private bool _dirty = true;
 +
-+	// Icon slides show a small picture (a game's 64x64 icon) centered.
-+	private sealed record Slide(ImageSource? Image, string Title, string Subtitle, bool Icon = false);
++	private bool _spotlightChanged;
++
++	private enum Framing
++	{
++		Fill,
++		// Posters and box art: the whole picture over a blurred copy of itself.
++		Fit,
++		// A game's 64x64 icon.
++		Icon
++	}
++
++	private sealed record Slide(string Image, ImageSource? Source, string Title, string Subtitle, Framing Framing, string Key = "");
 +
 +	public RotatingTile()
 +	{
@@ -253,12 +474,17 @@ index 0000000..7d4f31d
 +		_timer.Tick += (_, _) => Advance();
 +		Loaded += (_, _) =>
 +		{
++			SpotlightLibrary.Updated += Spotlight_OnUpdated;
 +			Rebuild();
 +			// Tiles on the same channel shouldn't all turn at once.
 +			_timer.Interval = TimeSpan.FromSeconds(Math.Max(2, Interval) + Stagger.NextDouble() * 2.5);
 +			_timer.Start();
 +		};
-+		Unloaded += (_, _) => _timer.Stop();
++		Unloaded += (_, _) =>
++		{
++			SpotlightLibrary.Updated -= Spotlight_OnUpdated;
++			_timer.Stop();
++		};
 +		IsVisibleChanged += (_, _) =>
 +		{
 +			if (IsVisible)
@@ -302,6 +528,18 @@ index 0000000..7d4f31d
 +		set => SetValue(IncludeXbox360GamesProperty, value);
 +	}
 +
++	public string Spotlight
++	{
++		get => (string)GetValue(SpotlightProperty);
++		set => SetValue(SpotlightProperty, value);
++	}
++
++	public int SpotlightOffset
++	{
++		get => (int)GetValue(SpotlightOffsetProperty);
++		set => SetValue(SpotlightOffsetProperty, value);
++	}
++
 +	public bool MusicFolder
 +	{
 +		get => (bool)GetValue(MusicFolderProperty);
@@ -326,6 +564,12 @@ index 0000000..7d4f31d
 +		set => SetValue(DecodeWidthProperty, value);
 +	}
 +
++	public string CurrentKey
++	{
++		get => (string)GetValue(CurrentKeyProperty);
++		private set => SetValue(CurrentKeyProperty, value);
++	}
++
 +	private static void OnSlidesChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
 +	{
 +		RotatingTile tile = (RotatingTile)d;
@@ -336,6 +580,12 @@ index 0000000..7d4f31d
 +		}
 +	}
 +
++	private void Spotlight_OnUpdated()
++	{
++		// New artwork arrived: pick it up at the next turn, without a jump.
++		_spotlightChanged = true;
++	}
++
 +	private void Rebuild()
 +	{
 +		if (!_dirty)
@@ -343,33 +593,52 @@ index 0000000..7d4f31d
 +			return;
 +		}
 +		_dirty = false;
-+		_slides.Clear();
-+		if (MusicFolder)
-+		{
-+			_slides.AddRange(MusicSlides());
-+		}
-+		else
-+		{
-+			if (PrimarySource != null || !string.IsNullOrEmpty(PrimaryTitle))
-+			{
-+				_slides.Add(new Slide(PrimarySource, PrimaryTitle ?? string.Empty, PrimarySubtitle ?? string.Empty));
-+			}
-+			if (IncludeXbox360Games)
-+			{
-+				_slides.AddRange(XeniaIntegration.GetLibraryArt().Select(art => new Slide(Load(art.CoverPath), art.Title, "Xbox 360", art.IsIcon)));
-+			}
-+			foreach (string item in (Items ?? string.Empty).Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-+			{
-+				string[] parts = item.Split('|');
-+				_slides.Add(new Slide(Load(parts[0]), parts.Length > 1 ? parts[1] : string.Empty, parts.Length > 2 ? parts[2] : string.Empty));
-+			}
-+		}
++		CollectSlides();
 +		_index = 0;
 +		Children.Clear();
 +		_front = null;
 +		if (_slides.Count > 0)
 +		{
 +			Show(_slides[0], animate: false);
++		}
++	}
++
++	private void CollectSlides()
++	{
++		_slides.Clear();
++		if (MusicFolder)
++		{
++			_slides.AddRange(MusicSlides());
++			return;
++		}
++		if (PrimarySource != null || !string.IsNullOrEmpty(PrimaryTitle))
++		{
++			_slides.Add(new Slide(string.Empty, PrimarySource, PrimaryTitle ?? string.Empty, PrimarySubtitle ?? string.Empty, Framing.Fill));
++		}
++		int games = 0;
++		if (IncludeXbox360Games)
++		{
++			foreach ((string id, string title, string cover, bool isIcon) in XeniaIntegration.GetLibraryArt())
++			{
++				_slides.Add(new Slide(cover, null, title, "Xbox 360", isIcon ? Framing.Icon : Framing.Fit, id));
++				games++;
++			}
++		}
++		foreach (string item in (Items ?? string.Empty).Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
++		{
++			string[] parts = item.Split('|');
++			_slides.Add(new Slide(parts[0], null, parts.Length > 1 ? parts[1] : string.Empty, parts.Length > 2 ? parts[2] : string.Empty, Framing.Fill));
++		}
++		// A tile of your own games only shows the spotlight while you have none.
++		if (!string.IsNullOrWhiteSpace(Spotlight) && games == 0)
++		{
++			IReadOnlyList<(SpotlightItem Item, string ImagePath)> spotlight = SpotlightLibrary.Available(Spotlight);
++			// Each tile starts at its own place in the shared library.
++			for (int i = 0; i < spotlight.Count; i++)
++			{
++				(SpotlightItem item, string path) = spotlight[(i + SpotlightOffset) % spotlight.Count];
++				_slides.Add(new Slide(path, null, item.Title, item.Subtitle, Framing.Fit));
++			}
 +		}
 +	}
 +
@@ -393,7 +662,7 @@ index 0000000..7d4f31d
 +		}
 +		if (songs.Count == 0)
 +		{
-+			yield return new Slide(null, PrimaryTitle, "Add songs to Assets\\Custom Files\\Music Files");
++			yield return new Slide(string.Empty, null, PrimaryTitle, "Add songs to Assets\\Custom Files\\Music Files", Framing.Fill);
 +			yield break;
 +		}
 +		Random random = new Random();
@@ -405,19 +674,19 @@ index 0000000..7d4f31d
 +			{
 +				artist = songs.Count + (songs.Count == 1 ? " song" : " songs");
 +			}
-+			yield return new Slide(null, name, artist);
++			yield return new Slide(string.Empty, null, name, artist, Framing.Fill);
 +		}
 +	}
 +
-+	private ImageSource? Load(string path)
++	private ImageSource? Load(Slide slide)
 +	{
-+		if (string.IsNullOrWhiteSpace(path))
++		if (slide.Source != null || string.IsNullOrWhiteSpace(slide.Image))
 +		{
-+			return null;
++			return slide.Source;
 +		}
 +		try
 +		{
-+			string full = Path.IsPathRooted(path) ? path : AppPaths.FindFile(path);
++			string full = Path.IsPathRooted(slide.Image) ? slide.Image : AppPaths.FindFile(slide.Image);
 +			if (!File.Exists(full))
 +			{
 +				return null;
@@ -440,6 +709,13 @@ index 0000000..7d4f31d
 +	private void Advance()
 +	{
 +		_timer.Interval = TimeSpan.FromSeconds(Math.Max(2, Interval));
++		if (_spotlightChanged)
++		{
++			_spotlightChanged = false;
++			string? current = _index < _slides.Count ? _slides[_index].Title : null;
++			CollectSlides();
++			_index = Math.Max(0, _slides.FindIndex(s => s.Title == current));
++		}
 +		if (_slides.Count < 2 || !IsVisible)
 +		{
 +			return;
@@ -450,13 +726,15 @@ index 0000000..7d4f31d
 +
 +	private void Show(Slide slide, bool animate)
 +	{
++		CurrentKey = slide.Key;
++		ImageSource? source = Load(slide);
 +		Grid layer = new Grid();
-+		if (slide.Image != null && slide.Icon)
++		if (source != null && slide.Framing != Framing.Fill)
 +		{
 +			layer.Background = new SolidColorBrush(Color.FromRgb(0x18, 0x18, 0x18));
 +			layer.Children.Add(new Image
 +			{
-+				Source = slide.Image,
++				Source = source,
 +				Stretch = Stretch.UniformToFill,
 +				Opacity = 0.55,
 +				Effect = new System.Windows.Media.Effects.BlurEffect
@@ -464,13 +742,10 @@ index 0000000..7d4f31d
 +					Radius = 36
 +				}
 +			});
-+			layer.Children.Add(new Image
++			Image picture = new Image
 +			{
-+				Source = slide.Image,
-+				Width = 128,
-+				Height = 128,
++				Source = source,
 +				Stretch = Stretch.Uniform,
-+				Margin = new Thickness(0, 0, 0, CaptionSize * 2),
 +				HorizontalAlignment = HorizontalAlignment.Center,
 +				VerticalAlignment = VerticalAlignment.Center,
 +				Effect = new System.Windows.Media.Effects.DropShadowEffect
@@ -479,13 +754,25 @@ index 0000000..7d4f31d
 +					ShadowDepth = 3,
 +					Opacity = 0.6
 +				}
-+			});
++			};
++			if (slide.Framing == Framing.Icon)
++			{
++				picture.Width = 128;
++				picture.Height = 128;
++				picture.Margin = new Thickness(0, 0, 0, CaptionSize * 2);
++			}
++			else
++			{
++				// Leave room for the caption under the picture.
++				picture.Margin = new Thickness(10, 10, 10, CaptionSize * 3.2);
++			}
++			layer.Children.Add(picture);
 +		}
-+		else if (slide.Image != null)
++		else if (source != null)
 +		{
 +			layer.Children.Add(new Image
 +			{
-+				Source = slide.Image,
++				Source = source,
 +				Stretch = Stretch.UniformToFill,
 +				HorizontalAlignment = HorizontalAlignment.Center,
 +				VerticalAlignment = VerticalAlignment.Center
@@ -632,6 +919,308 @@ index 3fc4db7..1f498e0 100644
  		if (string.Equals(game.LaunchType, "Url", StringComparison.OrdinalIgnoreCase))
  		{
  			string url = NormalizeUrl(game.LaunchCommand);
+diff --git a/XboxMetroLauncher/XboxMetroLauncher.Services/SpotlightLibrary.cs b/XboxMetroLauncher/XboxMetroLauncher.Services/SpotlightLibrary.cs
+new file mode 100644
+index 0000000..545d18c
+--- /dev/null
++++ b/XboxMetroLauncher/XboxMetroLauncher.Services/SpotlightLibrary.cs
+@@ -0,0 +1,296 @@
++using System;
++using System.Collections.Generic;
++using System.IO;
++using System.Linq;
++using System.Net.Http;
++using System.Text.Json;
++using System.Threading;
++using System.Threading.Tasks;
++using XboxMetroLauncher.Utilities;
++
++namespace XboxMetroLauncher.Services;
++
++public sealed record SpotlightItem(string Category, string Title, string Subtitle, string WikipediaPage);
++
++// Featured content from the console's era (2006-2014) for the rotating
++// channel tiles. Artwork isn't shipped: the first time DashX360 runs online it
++// fetches each title's lead image (poster, box art or album cover) from
++// Wikipedia and keeps it in UserData\Spotlight.
++public static class SpotlightLibrary
++{
++	public static readonly IReadOnlyList<SpotlightItem> Items = new SpotlightItem[]
++	{
++		// Movies.
++		new("movie", "The Dark Knight", "2008 · Movie", "The Dark Knight"),
++		new("movie", "Iron Man", "2008 · Movie", "Iron Man (2008 film)"),
++		new("movie", "Avatar", "2009 · Movie", "Avatar (2009 film)"),
++		new("movie", "Inception", "2010 · Movie", "Inception"),
++		new("movie", "Toy Story 3", "2010 · Movie", "Toy Story 3"),
++		new("movie", "The Avengers", "2012 · Movie", "The Avengers (2012 film)"),
++		new("movie", "Skyfall", "2012 · Movie", "Skyfall"),
++		new("movie", "The Hunger Games", "2012 · Movie", "The Hunger Games (film)"),
++		new("movie", "Up", "2009 · Movie", "Up (2009 film)"),
++		new("movie", "WALL-E", "2008 · Movie", "WALL-E"),
++		new("movie", "Transformers", "2007 · Movie", "Transformers (film)"),
++		new("movie", "Star Trek", "2009 · Movie", "Star Trek (2009 film)"),
++		new("movie", "District 9", "2009 · Movie", "District 9"),
++		new("movie", "Harry Potter and the Deathly Hallows – Part 2", "2011 · Movie", "Harry Potter and the Deathly Hallows – Part 2"),
++		new("movie", "Frozen", "2013 · Movie", "Frozen (2013 film)"),
++		new("movie", "Gravity", "2013 · Movie", "Gravity (2013 film)"),
++		new("movie", "Despicable Me", "2010 · Movie", "Despicable Me"),
++		new("movie", "How to Train Your Dragon", "2010 · Movie", "How to Train Your Dragon (film)"),
++		new("movie", "The Social Network", "2010 · Movie", "The Social Network"),
++		new("movie", "Guardians of the Galaxy", "2014 · Movie", "Guardians of the Galaxy (film)"),
++		new("movie", "Interstellar", "2014 · Movie", "Interstellar (film)"),
++		new("movie", "The Lego Movie", "2014 · Movie", "The Lego Movie"),
++		new("movie", "Pirates of the Caribbean: At World's End", "2007 · Movie", "Pirates of the Caribbean: At World's End"),
++		new("movie", "Kung Fu Panda", "2008 · Movie", "Kung Fu Panda (film)"),
++		new("movie", "Cars", "2006 · Movie", "Cars (film)"),
++		new("movie", "Casino Royale", "2006 · Movie", "Casino Royale (2006 film)"),
++		new("movie", "The Bourne Ultimatum", "2007 · Movie", "The Bourne Ultimatum (film)"),
++		new("movie", "Ratatouille", "2007 · Movie", "Ratatouille (film)"),
++		new("movie", "The Dark Knight Rises", "2012 · Movie", "The Dark Knight Rises"),
++		new("movie", "Wreck-It Ralph", "2012 · Movie", "Wreck-It Ralph"),
++		new("movie", "Tangled", "2010 · Movie", "Tangled"),
++		new("movie", "Thor", "2011 · Movie", "Thor (film)"),
++		new("movie", "Captain America: The First Avenger", "2011 · Movie", "Captain America: The First Avenger"),
++		new("movie", "Super 8", "2011 · Movie", "Super 8 (film)"),
++		new("movie", "Iron Man 3", "2013 · Movie", "Iron Man 3"),
++		new("movie", "Monsters University", "2013 · Movie", "Monsters University"),
++		// TV.
++		new("tv", "Breaking Bad", "TV Series", "Breaking Bad"),
++		new("tv", "Lost", "TV Series", "Lost (TV series)"),
++		new("tv", "Heroes", "TV Series", "Heroes (American TV series)"),
++		new("tv", "The Walking Dead", "TV Series", "The Walking Dead (TV series)"),
++		new("tv", "Game of Thrones", "TV Series", "Game of Thrones"),
++		new("tv", "Mad Men", "TV Series", "Mad Men"),
++		new("tv", "30 Rock", "TV Series", "30 Rock"),
++		new("tv", "The Office", "TV Series", "The Office (American TV series)"),
++		new("tv", "Glee", "TV Series", "Glee (TV series)"),
++		new("tv", "How I Met Your Mother", "TV Series", "How I Met Your Mother"),
++		new("tv", "The Big Bang Theory", "TV Series", "The Big Bang Theory"),
++		new("tv", "Modern Family", "TV Series", "Modern Family"),
++		new("tv", "Sherlock", "TV Series", "Sherlock (TV series)"),
++		new("tv", "Fringe", "TV Series", "Fringe (TV series)"),
++		new("tv", "Chuck", "TV Series", "Chuck (TV series)"),
++		new("tv", "Parks and Recreation", "TV Series", "Parks and Recreation"),
++		new("tv", "Community", "TV Series", "Community (TV series)"),
++		new("tv", "Dexter", "TV Series", "Dexter (TV series)"),
++		new("tv", "Battlestar Galactica", "TV Series", "Battlestar Galactica (2004 TV series)"),
++		new("tv", "Doctor Who", "TV Series", "Doctor Who"),
++		// Xbox 360 games.
++		new("game", "Halo 3", "2007 · Xbox 360", "Halo 3"),
++		new("game", "Gears of War", "2006 · Xbox 360", "Gears of War (video game)"),
++		new("game", "Mass Effect 2", "2010 · Xbox 360", "Mass Effect 2"),
++		new("game", "Red Dead Redemption", "2010 · Xbox 360", "Red Dead Redemption"),
++		new("game", "The Elder Scrolls V: Skyrim", "2011 · Xbox 360", "The Elder Scrolls V: Skyrim"),
++		new("game", "Grand Theft Auto IV", "2008 · Xbox 360", "Grand Theft Auto IV"),
++		new("game", "BioShock", "2007 · Xbox 360", "BioShock"),
++		new("game", "Fable II", "2008 · Xbox 360", "Fable II"),
++		new("game", "Forza Motorsport 4", "2011 · Xbox 360", "Forza Motorsport 4"),
++		new("game", "Call of Duty: Modern Warfare 2", "2009 · Xbox 360", "Call of Duty: Modern Warfare 2"),
++		new("game", "Halo: Reach", "2010 · Xbox 360", "Halo: Reach"),
++		new("game", "Gears of War 3", "2011 · Xbox 360", "Gears of War 3"),
++		new("game", "Left 4 Dead 2", "2009 · Xbox 360", "Left 4 Dead 2"),
++		new("game", "Portal 2", "2011 · Xbox 360", "Portal 2"),
++		new("game", "Batman: Arkham City", "2011 · Xbox 360", "Batman: Arkham City"),
++		new("game", "Assassin's Creed II", "2009 · Xbox 360", "Assassin's Creed II"),
++		new("game", "Fallout 3", "2008 · Xbox 360", "Fallout 3"),
++		new("game", "Halo 4", "2012 · Xbox 360", "Halo 4"),
++		new("game", "Borderlands 2", "2012 · Xbox 360", "Borderlands 2"),
++		new("game", "Dead Rising", "2006 · Xbox 360", "Dead Rising (video game)"),
++		new("game", "Alan Wake", "2010 · Xbox 360", "Alan Wake"),
++		new("game", "Limbo", "2010 · Xbox Live Arcade", "Limbo (video game)"),
++		new("game", "Braid", "2008 · Xbox Live Arcade", "Braid (video game)"),
++		new("game", "Castle Crashers", "2008 · Xbox Live Arcade", "Castle Crashers"),
++		new("game", "Rock Band 2", "2008 · Xbox 360", "Rock Band 2"),
++		new("game", "Guitar Hero III: Legends of Rock", "2007 · Xbox 360", "Guitar Hero III: Legends of Rock"),
++		new("game", "Crackdown", "2007 · Xbox 360", "Crackdown (video game)"),
++		new("game", "Mass Effect", "2007 · Xbox 360", "Mass Effect (video game)"),
++		new("game", "Forza Horizon", "2012 · Xbox 360", "Forza Horizon"),
++		new("game", "Minecraft: Xbox 360 Edition", "2012 · Xbox Live Arcade", "Minecraft: Xbox 360 Edition"),
++		new("game", "Call of Duty: Black Ops II", "2012 · Xbox 360", "Call of Duty: Black Ops II"),
++		new("game", "Dance Central", "2010 · Kinect", "Dance Central (video game)"),
++		// Music.
++		new("music", "Viva la Vida", "Coldplay · 2008", "Viva la Vida or Death and All His Friends"),
++		new("music", "The Fame", "Lady Gaga · 2008", "The Fame"),
++		new("music", "21", "Adele · 2011", "21 (Adele album)"),
++		new("music", "1989", "Taylor Swift · 2014", "1989 (Taylor Swift album)"),
++		new("music", "Teenage Dream", "Katy Perry · 2010", "Teenage Dream (Katy Perry album)"),
++		new("music", "Random Access Memories", "Daft Punk · 2013", "Random Access Memories"),
++		new("music", "Minutes to Midnight", "Linkin Park · 2007", "Minutes to Midnight (album)"),
++		new("music", "Good Girl Gone Bad", "Rihanna · 2007", "Good Girl Gone Bad"),
++		new("music", "AM", "Arctic Monkeys · 2013", "AM (Arctic Monkeys album)"),
++		new("music", "Night Visions", "Imagine Dragons · 2012", "Night Visions (album)"),
++		new("music", "Recovery", "Eminem · 2010", "Recovery (Eminem album)"),
++		new("music", "Only by the Night", "Kings of Leon · 2008", "Only by the Night"),
++		new("music", "21st Century Breakdown", "Green Day · 2009", "21st Century Breakdown"),
++		new("music", "Doo-Wops & Hooligans", "Bruno Mars · 2010", "Doo-Wops & Hooligans"),
++		new("music", "Overexposed", "Maroon 5 · 2012", "Overexposed (album)"),
++		new("music", "The E.N.D.", "The Black Eyed Peas · 2009", "The E.N.D."),
++		new("music", "Take Care", "Drake · 2011", "Take Care (album)"),
++		new("music", "Sigh No More", "Mumford & Sons · 2009", "Sigh No More")
++	};
++
++	private static readonly object Lock = new object();
++
++	private static readonly Dictionary<string, string> Images = new Dictionary<string, string>(StringComparer.Ordinal);
++
++	private static int _started;
++
++	// Raised on a background thread as artwork arrives.
++	public static event Action? Updated;
++
++	private static string CacheFolder => Path.Combine(AppPaths.UserDataFolder, "Spotlight");
++
++	// Items of the given categories ("movie,tv") whose artwork is available.
++	public static IReadOnlyList<(SpotlightItem Item, string ImagePath)> Available(string categories)
++	{
++		EnsureStarted();
++		HashSet<string> wanted = new HashSet<string>(categories.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries), StringComparer.OrdinalIgnoreCase);
++		lock (Lock)
++		{
++			return Items.Where(item => wanted.Contains(item.Category) && Images.ContainsKey(item.WikipediaPage))
++				.Select(item => (item, Images[item.WikipediaPage]))
++				.ToList();
++		}
++	}
++
++	public static void EnsureStarted()
++	{
++		if (Interlocked.Exchange(ref _started, 1) != 0)
++		{
++			return;
++		}
++		try
++		{
++			Directory.CreateDirectory(CacheFolder);
++			foreach (SpotlightItem item in Items)
++			{
++				string? cached = Directory.EnumerateFiles(CacheFolder, FileStem(item) + ".*").FirstOrDefault();
++				if (cached != null)
++				{
++					Images[item.WikipediaPage] = cached;
++				}
++			}
++		}
++		catch (Exception ex)
++		{
++			App.LogException(ex, "SpotlightLibrary.EnsureStarted");
++		}
++		if (Images.Count < Items.Count)
++		{
++			_ = Task.Run(DownloadMissingAsync);
++		}
++	}
++
++	private static async Task DownloadMissingAsync()
++	{
++		using HttpClient client = new HttpClient
++		{
++			Timeout = TimeSpan.FromSeconds(20)
++		};
++		// Wikimedia asks clients to identify themselves.
++		client.DefaultRequestHeaders.UserAgent.ParseAdd("DashX360-Xenia/1.0 (https://github.com/ZivvoZ/dashx360; Xbox 360 dashboard spotlight artwork)");
++		int added = 0;
++		foreach (SpotlightItem item in Items)
++		{
++			lock (Lock)
++			{
++				if (Images.ContainsKey(item.WikipediaPage))
++				{
++					continue;
++				}
++			}
++			try
++			{
++				string summaryUrl = "https://en.wikipedia.org/api/rest_v1/page/summary/" + Uri.EscapeDataString(item.WikipediaPage.Replace(' ', '_'));
++				using JsonDocument summary = JsonDocument.Parse(await GetWithRetryAsync(client, summaryUrl, (response) => response.Content.ReadAsStringAsync()).ConfigureAwait(false));
++				string? imageUrl = null;
++				if (summary.RootElement.TryGetProperty("originalimage", out JsonElement original) && original.TryGetProperty("width", out JsonElement width) && width.GetInt32() <= 1400)
++				{
++					imageUrl = original.GetProperty("source").GetString();
++				}
++				else if (summary.RootElement.TryGetProperty("thumbnail", out JsonElement thumbnail))
++				{
++					imageUrl = thumbnail.GetProperty("source").GetString();
++				}
++				if (string.IsNullOrEmpty(imageUrl))
++				{
++					Log(item, "no lead image");
++					continue;
++				}
++				string extension = Path.GetExtension(new Uri(imageUrl).AbsolutePath).ToLowerInvariant();
++				if (extension is not (".jpg" or ".jpeg" or ".png"))
++				{
++					Log(item, "unsupported image " + extension);
++					continue;
++				}
++				byte[] data = await GetWithRetryAsync(client, imageUrl, (response) => response.Content.ReadAsByteArrayAsync()).ConfigureAwait(false);
++				string path = Path.Combine(CacheFolder, FileStem(item) + extension);
++				await File.WriteAllBytesAsync(path, data).ConfigureAwait(false);
++				lock (Lock)
++				{
++					Images[item.WikipediaPage] = path;
++				}
++				// Notify in small batches so tiles don't rebuild for every file.
++				if (++added % 4 == 0)
++				{
++					Updated?.Invoke();
++				}
++			}
++			catch (HttpRequestException ex) when (ex.StatusCode == null)
++			{
++				// Offline: keep what's cached and try again next time.
++				Log(item, ex.Message);
++				break;
++			}
++			catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or IOException or KeyNotFoundException or InvalidOperationException)
++			{
++				Log(item, ex.Message);
++			}
++			// Stay well inside Wikimedia's request limits.
++			await Task.Delay(400).ConfigureAwait(false);
++		}
++		if (added > 0)
++		{
++			Updated?.Invoke();
++		}
++	}
++
++	// Retries after "too many requests" and server errors, waiting longer
++	// each time (or as long as the server asks).
++	private static async Task<T> GetWithRetryAsync<T>(HttpClient client, string url, Func<HttpResponseMessage, Task<T>> read)
++	{
++		for (int attempt = 0; ; attempt++)
++		{
++			using HttpResponseMessage response = await client.GetAsync(url).ConfigureAwait(false);
++			int status = (int)response.StatusCode;
++			if ((status == 429 || status >= 500) && attempt < 4)
++			{
++				TimeSpan wait = response.Headers.RetryAfter?.Delta ?? TimeSpan.FromSeconds(2 << attempt);
++				await Task.Delay(wait < TimeSpan.FromSeconds(30) ? wait : TimeSpan.FromSeconds(30)).ConfigureAwait(false);
++				continue;
++			}
++			response.EnsureSuccessStatusCode();
++			return await read(response).ConfigureAwait(false);
++		}
++	}
++
++	private static void Log(SpotlightItem item, string message)
++	{
++		try
++		{
++			File.AppendAllText(Path.Combine(AppPaths.LogsFolder, "spotlight.log"), $"[{DateTimeOffset.Now:u}] {item.WikipediaPage}: {message}{Environment.NewLine}");
++		}
++		catch
++		{
++		}
++	}
++
++	private static string FileStem(SpotlightItem item)
++	{
++		char[] chars = item.WikipediaPage.Select(c => char.IsLetterOrDigit(c) ? char.ToLowerInvariant(c) : '-').ToArray();
++		return new string(chars).Trim('-');
++	}
++}
 diff --git a/XboxMetroLauncher/XboxMetroLauncher.Services/WifiService.cs b/XboxMetroLauncher/XboxMetroLauncher.Services/WifiService.cs
 new file mode 100644
 index 0000000..e06a8db
@@ -1029,16 +1618,17 @@ index 0000000..e06a8db
 +}
 diff --git a/XboxMetroLauncher/XboxMetroLauncher.Services/XeniaIntegration.cs b/XboxMetroLauncher/XboxMetroLauncher.Services/XeniaIntegration.cs
 new file mode 100644
-index 0000000..d888223
+index 0000000..e099ed2
 --- /dev/null
 +++ b/XboxMetroLauncher/XboxMetroLauncher.Services/XeniaIntegration.cs
-@@ -0,0 +1,428 @@
+@@ -0,0 +1,676 @@
 +using System;
 +using System.Collections.Generic;
 +using System.Diagnostics;
 +using System.IO;
 +using System.Linq;
 +using System.Text.Json;
++using System.Threading;
 +using System.Threading.Tasks;
 +using System.Windows;
 +using System.Windows.Media;
@@ -1057,7 +1647,31 @@ index 0000000..d888223
 +
 +	public int Achievements { get; set; }
 +
++	// The game running in Xenia, or 00000000.
++	public string CurrentTitleId { get; set; } = string.Empty;
++
 +	public List<XeniaTitleStatus> Titles { get; set; } = new List<XeniaTitleStatus>();
++}
++
++public sealed class XeniaAchievementStatus
++{
++	public uint Id { get; set; }
++
++	public string Name { get; set; } = string.Empty;
++
++	public string Description { get; set; } = string.Empty;
++
++	public string LockedDescription { get; set; } = string.Empty;
++
++	public int Gamerscore { get; set; }
++
++	public bool Unlocked { get; set; }
++
++	public bool Secret { get; set; }
++
++	public long UnlockTime { get; set; }
++
++	public string Icon { get; set; } = string.Empty;
 +}
 +
 +public sealed class XeniaTitleStatus
@@ -1073,6 +1687,8 @@ index 0000000..d888223
 +	public int Gamerscore { get; set; }
 +
 +	public int MaxGamerscore { get; set; }
++
++	public List<XeniaAchievementStatus> List { get; set; } = new List<XeniaAchievementStatus>();
 +}
 +
 +// Bridges DashX360 and the Xenia Xbox 360 emulator. Xenia starts DashX360 as
@@ -1099,6 +1715,213 @@ index 0000000..d888223
 +
 +	// Raised on the UI thread when a game started through Xenia has closed.
 +	public static event Action? GameExited;
++
++	// Raised on the UI thread when Xenia asks for the Xbox Guide (the Guide
++	// button, or Ctrl+G, pressed in the game).
++	public static event Action? GuideToggleRequested;
++
++	// Raised on the UI thread when Xenia updates the profile summary, for
++	// example after an achievement unlocks.
++	public static event Action? ProfileStatusChanged;
++
++	private static GuideSession? _session;
++
++	private static FileSystemWatcher? _profileWatcher;
++
++	private static DateTime _profileChangedAt;
++
++	// The game running in Xenia.
++	public static GameMetadata? RunningGame { get; private set; }
++
++	// Named events shared with the running Xenia; see ShellGuideLink in
++	// Xenia's dashboard_shell.h.
++	private sealed class GuideSession : IDisposable
++	{
++		private readonly EventWaitHandle _toggle;
++
++		private readonly EventWaitHandle _visible;
++
++		private readonly EventWaitHandle _quit;
++
++		private readonly EventWaitHandle _signOut;
++
++		private readonly ManualResetEvent _stop = new ManualResetEvent(false);
++
++		public GuideSession(int xeniaProcessId)
++		{
++			string prefix = "Local\\XeniaDashboard." + xeniaProcessId + ".";
++			_toggle = new EventWaitHandle(false, EventResetMode.AutoReset, prefix + "ToggleGuide");
++			_visible = new EventWaitHandle(false, EventResetMode.ManualReset, prefix + "GuideVisible");
++			_quit = new EventWaitHandle(false, EventResetMode.AutoReset, prefix + "Quit");
++			_signOut = new EventWaitHandle(false, EventResetMode.AutoReset, prefix + "SignOut");
++			Thread thread = new Thread(WaitForToggles)
++			{
++				IsBackground = true,
++				Name = "Xenia Guide link"
++			};
++			thread.Start();
++		}
++
++		private void WaitForToggles()
++		{
++			WaitHandle[] handles = { _stop, _toggle };
++			while (WaitHandle.WaitAny(handles) == 1)
++			{
++				System.Windows.Application.Current?.Dispatcher.BeginInvoke((Action)delegate
++				{
++					GuideToggleRequested?.Invoke();
++				});
++			}
++		}
++
++		public void SetVisible(bool visible)
++		{
++			if (visible)
++			{
++				_visible.Set();
++			}
++			else
++			{
++				_visible.Reset();
++			}
++		}
++
++		public void Quit()
++		{
++			_quit.Set();
++		}
++
++		public void SignOut()
++		{
++			_signOut.Set();
++		}
++
++		public void Dispose()
++		{
++			_stop.Set();
++			_visible.Reset();
++			_toggle.Dispose();
++			_visible.Dispose();
++			_quit.Dispose();
++			_signOut.Dispose();
++		}
++	}
++
++	// Called as the Guide starts closing, while DashX360 still has the
++	// foreground: lets Xenia take it back so the game gets the keyboard and
++	// controller again.
++	public static void AllowGameToTakeFocus()
++	{
++		if (_runningProcessId != 0)
++		{
++			AllowSetForegroundWindow(_runningProcessId);
++		}
++	}
++
++	// True for a window of the game running in Xenia.
++	public static bool IsXeniaWindow(nint window)
++	{
++		if (_runningProcessId == 0 || window == IntPtr.Zero)
++		{
++			return false;
++		}
++		GetWindowThreadProcessId(window, out uint processId);
++		return processId == (uint)_runningProcessId;
++	}
++
++	[System.Runtime.InteropServices.DllImport("user32.dll")]
++	private static extern uint GetWindowThreadProcessId(nint window, out uint processId);
++
++	// Gives the game's window the foreground. Called just before the Guide
++	// hides, while DashX360 still holds the foreground and so may pass it on.
++	public static void FocusGame()
++	{
++		try
++		{
++			if (_runningProcessId == 0)
++			{
++				return;
++			}
++			using Process process = Process.GetProcessById(_runningProcessId);
++			nint window = process.MainWindowHandle;
++			if (window != IntPtr.Zero)
++			{
++				SetForegroundWindow(window);
++			}
++		}
++		catch (ArgumentException)
++		{
++			// The game has already closed.
++		}
++	}
++
++	[System.Runtime.InteropServices.DllImport("user32.dll")]
++	private static extern bool AllowSetForegroundWindow(int processId);
++
++	[System.Runtime.InteropServices.DllImport("user32.dll")]
++	private static extern bool SetForegroundWindow(nint window);
++
++	private static int _runningProcessId;
++
++	// Tells Xenia whether the Guide is on screen; Xenia pauses the game while
++	// it is.
++	public static void SetGuideVisible(bool visible)
++	{
++		_session?.SetVisible(visible);
++	}
++
++	// Xbox Home: Xenia closes the game, which brings the dashboard back.
++	public static void QuitGame()
++	{
++		_session?.Quit();
++	}
++
++	public static void SignOutOfGame()
++	{
++		_session?.SignOut();
++	}
++
++	// Watches the profile summary Xenia keeps, so gamerscore and achievements
++	// update on the dashboard as soon as they change.
++	public static void WatchProfileStatus()
++	{
++		string? path = ProfileJsonPath;
++		string? folder = path == null ? null : Path.GetDirectoryName(path);
++		if (_profileWatcher != null || folder == null)
++		{
++			return;
++		}
++		try
++		{
++			Directory.CreateDirectory(folder);
++			_profileWatcher = new FileSystemWatcher(folder, "profile.json")
++			{
++				NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size
++			};
++			FileSystemEventHandler changed = delegate
++			{
++				// Xenia writes then renames; coalesce the burst of events.
++				_profileChangedAt = DateTime.UtcNow;
++				System.Windows.Application.Current?.Dispatcher.BeginInvoke((Action)async delegate
++				{
++					DateTime stamp = _profileChangedAt;
++					await Task.Delay(300);
++					if (stamp == _profileChangedAt)
++					{
++						ProfileStatusChanged?.Invoke();
++					}
++				});
++			};
++			_profileWatcher.Changed += changed;
++			_profileWatcher.Created += changed;
++			_profileWatcher.Renamed += (sender, e) => changed(sender, e);
++			_profileWatcher.EnableRaisingEvents = true;
++		}
++		catch (Exception ex)
++		{
++			App.LogException(ex, "XeniaIntegration.WatchProfileStatus");
++		}
++	}
 +
 +	public static bool IsXeniaGame(GameMetadata? game)
 +	{
@@ -1194,14 +2017,14 @@ index 0000000..d888223
 +		public List<XeniaGame> Games { get; set; } = new List<XeniaGame>();
 +	}
 +
-+	// Titles and art of the Xbox 360 games Xenia found. IsIcon is set when
-+	// only the game's small icon is available.
-+	public static IReadOnlyList<(string Title, string CoverPath, bool IsIcon)> GetLibraryArt()
++	// Library IDs, titles and art of the Xbox 360 games Xenia found. IsIcon
++	// is set when only the game's small icon is available.
++	public static IReadOnlyList<(string Id, string Title, string CoverPath, bool IsIcon)> GetLibraryArt()
 +	{
 +		string? path = LibraryJsonPath;
 +		if (path == null || !File.Exists(path))
 +		{
-+			return Array.Empty<(string, string, bool)>();
++			return Array.Empty<(string, string, string, bool)>();
 +		}
 +		try
 +		{
@@ -1211,13 +2034,13 @@ index 0000000..d888223
 +				AllowTrailingCommas = true
 +			});
 +			return (file?.Games ?? new List<XeniaGame>())
-+				.Select((XeniaGame g) => (g.Title, string.IsNullOrWhiteSpace(g.CoverPath) ? g.IconPath : g.CoverPath, string.IsNullOrWhiteSpace(g.CoverPath)))
-+				.Where(((string Title, string CoverPath, bool IsIcon) g) => !string.IsNullOrWhiteSpace(g.CoverPath) && File.Exists(g.CoverPath))
++				.Select((XeniaGame g) => (IdPrefix + g.TitleId + "-" + StableHash(g.Path), g.Title, string.IsNullOrWhiteSpace(g.CoverPath) ? g.IconPath : g.CoverPath, string.IsNullOrWhiteSpace(g.CoverPath)))
++				.Where(((string Id, string Title, string CoverPath, bool IsIcon) g) => !string.IsNullOrWhiteSpace(g.CoverPath) && File.Exists(g.CoverPath))
 +				.ToList();
 +		}
 +		catch
 +		{
-+			return Array.Empty<(string, string, bool)>();
++			return Array.Empty<(string, string, string, bool)>();
 +		}
 +	}
 +
@@ -1325,6 +2148,8 @@ index 0000000..d888223
 +			UseShellExecute = false
 +		};
 +		info.Environment["XENIA_DASHBOARD_SHELL"] = "1";
++		info.Environment["XENIA_DASHBOARD_SHELL_PID"] = Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture);
++		WatchProfileStatus();
 +		if (SessionProvider?.Invoke() is var (profile, settings))
 +		{
 +			info.Environment["XENIA_DASHBOARD_GAMERTAG"] = profile.Gamertag;
@@ -1340,10 +2165,22 @@ index 0000000..d888223
 +		if (process != null)
 +		{
 +			_isXeniaGameRunning = true;
++			RunningGame = game;
++			_runningProcessId = process.Id;
++			_session?.Dispose();
++			GuideSession session = new GuideSession(process.Id);
++			_session = session;
 +			process.EnableRaisingEvents = true;
 +			process.Exited += delegate
 +			{
 +				_isXeniaGameRunning = false;
++				RunningGame = null;
++				_runningProcessId = 0;
++				if (_session == session)
++				{
++					_session = null;
++				}
++				session.Dispose();
 +				RestoreDashboardWindow();
 +				System.Windows.Application.Current?.Dispatcher.BeginInvoke((Action)delegate
 +				{
@@ -1462,7 +2299,7 @@ index 0000000..d888223
 +	}
 +}
 diff --git a/XboxMetroLauncher/XboxMetroLauncher.ViewModels/DashboardViewModel.cs b/XboxMetroLauncher/XboxMetroLauncher.ViewModels/DashboardViewModel.cs
-index e8a9bef..f9d087f 100644
+index e8a9bef..1ff58ba 100644
 --- a/XboxMetroLauncher/XboxMetroLauncher.ViewModels/DashboardViewModel.cs
 +++ b/XboxMetroLauncher/XboxMetroLauncher.ViewModels/DashboardViewModel.cs
 @@ -1042,6 +1042,7 @@ public sealed class DashboardViewModel : ObservableObject
@@ -1482,7 +2319,7 @@ index e8a9bef..f9d087f 100644
  	public ICommand OpenSteamSetupCommand { get; }
  
  	public ICommand CloseSteamSetupCommand { get; }
-@@ -2797,6 +2800,11 @@ public sealed class DashboardViewModel : ObservableObject
+@@ -2797,6 +2800,14 @@ public sealed class DashboardViewModel : ObservableObject
  
  	public event EventHandler<DashboardToastRequest>? ToastRequested;
  
@@ -1491,10 +2328,13 @@ index e8a9bef..f9d087f 100644
 +
 +	public ICommand OpenSystemSettingsCommand { get; }
 +
++	// The games channel spotlight: launches the game it shows.
++	public ICommand LaunchSpotlightGameCommand { get; }
++
  	[DllImport("user32.dll")]
  	[return: MarshalAs(UnmanagedType.Bool)]
  	private static extern bool SetForegroundWindow(nint hWnd);
-@@ -2977,6 +2985,7 @@ public sealed class DashboardViewModel : ObservableObject
+@@ -2977,6 +2988,7 @@ public sealed class DashboardViewModel : ObservableObject
  		ExportDataCommand = new AsyncRelayCommand(ExportDataAsync);
  		ImportDataCommand = new AsyncRelayCommand(ImportDataAsync);
  		ScanSteamGamesCommand = new AsyncRelayCommand(ScanSteamGamesAsync);
@@ -1502,17 +2342,27 @@ index e8a9bef..f9d087f 100644
  		OpenSteamSetupCommand = new AsyncRelayCommand(OpenSteamSetupAsync);
  		CloseSteamSetupCommand = new RelayCommand((Action)delegate
  		{
-@@ -3093,6 +3102,9 @@ public sealed class DashboardViewModel : ObservableObject
+@@ -3093,6 +3105,19 @@ public sealed class DashboardViewModel : ObservableObject
  		OpenMyPinsCommand = new RelayCommand(OpenMyPins);
  		CloseMyGamesCommand = new RelayCommand((Action)(() => CloseLibraryMenu(playSound: true)));
  		OpenLauncherSettingsCommand = new RelayCommand(OpenLauncherSettings);
 +		OpenSystemSettingsCommand = new RelayCommand(() => SystemSettingsRequested?.Invoke());
++		LaunchSpotlightGameCommand = new RelayCommand(delegate(object? parameter)
++		{
++			GameCardViewModel? card = Games.FirstOrDefault((GameCardViewModel game) => string.Equals(game.Game.Id, parameter as string, StringComparison.OrdinalIgnoreCase));
++			if (card != null && LaunchGameCommand.CanExecute(card))
++			{
++				LaunchGameCommand.Execute(card);
++			}
++		});
 +		XeniaIntegration.SessionProvider = () => (Profile, Settings);
 +		XeniaIntegration.GameExited += () => _ = ApplyXeniaProfileAsync();
++		XeniaIntegration.ProfileStatusChanged += () => _ = ApplyXeniaProfileAsync();
++		XeniaIntegration.WatchProfileStatus();
  		CloseLauncherSettingsCommand = new RelayCommand((Action)(() => CloseLauncherSettings(playSound: true)));
  		ChooseSelectedHomeImageCommand = new AsyncRelayCommand(ChooseSelectedHomeImageAsync);
  		ChooseSelectedGameMenuImageCommand = new AsyncRelayCommand(ChooseSelectedGameMenuImageAsync);
-@@ -3233,6 +3245,14 @@ public sealed class DashboardViewModel : ObservableObject
+@@ -3233,6 +3258,14 @@ public sealed class DashboardViewModel : ObservableObject
  		Settings.DiscordGrantedScopes = string.Empty;
  		Settings.DiscordTokenType = string.Empty;
  		_library = await _libraryService.LoadAsync();
@@ -1527,7 +2377,7 @@ index e8a9bef..f9d087f 100644
  		foreach (GameMetadata game in _library.Games)
  		{
  			GameMetadata gameMetadata = game;
-@@ -5732,7 +5752,9 @@ public sealed class DashboardViewModel : ObservableObject
+@@ -5732,7 +5765,9 @@ public sealed class DashboardViewModel : ObservableObject
  		{
  			SelectedGame = card;
  			_runningGameService.BeginLaunch(card.Game, DateTimeOffset.UtcNow);
@@ -1538,7 +2388,7 @@ index e8a9bef..f9d087f 100644
  			{
  				Window window = System.Windows.Application.Current?.MainWindow;
  				if (window != null)
-@@ -8019,6 +8041,100 @@ public sealed class DashboardViewModel : ObservableObject
+@@ -8019,6 +8054,100 @@ public sealed class DashboardViewModel : ObservableObject
  		}
  	}
  
@@ -1639,7 +2489,7 @@ index e8a9bef..f9d087f 100644
  	private async Task ScanSteamGamesAsync()
  	{
  		_ = 1;
-@@ -8289,6 +8405,9 @@ public sealed class DashboardViewModel : ObservableObject
+@@ -8289,6 +8418,9 @@ public sealed class DashboardViewModel : ObservableObject
  			OpenMyApps();
  			break;
  		case "music.player":
@@ -1683,6 +2533,452 @@ index b46dd60..863b5e9 100644
  			if (!IsSteamGame)
  			{
  				return "Manual";
+diff --git a/XboxMetroLauncher/XboxMetroLauncher.ViewModels/GuideViewModel.cs b/XboxMetroLauncher/XboxMetroLauncher.ViewModels/GuideViewModel.cs
+index 15f8493..47d9f67 100644
+--- a/XboxMetroLauncher/XboxMetroLauncher.ViewModels/GuideViewModel.cs
++++ b/XboxMetroLauncher/XboxMetroLauncher.ViewModels/GuideViewModel.cs
+@@ -1034,6 +1034,10 @@ public sealed class GuideViewModel : ObservableObject, IDisposable
+ 				}
+ 				break;
+ 			}
++			if (IsPlayingXbox360Game)
++			{
++				return "Sign Out";
++			}
+ 			return _dashboard.RunningGameFooterActionText;
+ 		}
+ 	}
+@@ -1044,7 +1048,7 @@ public sealed class GuideViewModel : ObservableObject, IDisposable
+ 		GuideScreen.Party => string.Empty, 
+ 		GuideScreen.FriendSearch => "Space", 
+ 		GuideScreen.FriendProfile => string.Empty, 
+-		_ => "Minimize Dashboard", 
++		_ => IsPlayingXbox360Game ? "Xbox Home" : "Minimize Dashboard", 
+ 	};
+ 
+ 	public bool ShowFooterXAction
+@@ -1566,6 +1570,11 @@ public sealed class GuideViewModel : ObservableObject, IDisposable
+ 				LeaveParty();
+ 				_audioService.Play("guide-select");
+ 			}
++			else if (IsPlayingXbox360Game)
++			{
++				_audioService.Play("guide-select");
++				ConfirmSignOut();
++			}
+ 			else
+ 			{
+ 				CloseRunningGameFromGuideAsync();
+@@ -1588,6 +1597,11 @@ public sealed class GuideViewModel : ObservableObject, IDisposable
+ 				BuildFriendsListItems();
+ 				_audioService.Play("guide-select");
+ 			}
++			else if (_screen != GuideScreen.Party && IsPlayingXbox360Game)
++			{
++				_audioService.Play("guide-select");
++				ConfirmQuitToXboxHome();
++			}
+ 			else if (_screen != GuideScreen.Party)
+ 			{
+ 				MinimizeDashboard();
+@@ -1918,6 +1932,9 @@ public sealed class GuideViewModel : ObservableObject, IDisposable
+ 		Items.Clear();
+ 		switch (_selectedTabIndex)
+ 		{
++		case 0 when IsPlayingXbox360Game:
++			BuildInGameItems();
++			break;
+ 		case 0:
+ 			Items.Add(new GuideMenuItem("My Games", "\ue7fc", OpenMyGames));
+ 			Items.Add(new GuideMenuItem("My Apps", "\uecaa", OpenMyApps));
+@@ -2164,7 +2181,7 @@ public sealed class GuideViewModel : ObservableObject, IDisposable
+ 		AchievementItems.Clear();
+ 		RefreshAchievementGameSelection();
+ 		RefreshAchievementSelection();
+-		StatusText = ((AchievementGameItems.Count == 0) ? "Scan Steam games in Settings to view achievements." : "Select a game to view achievements.");
++		StatusText = ((AchievementGameItems.Count == 0) ? "Play a game to earn achievements." : "Select a game to view achievements.");
+ 		OnPropertyChanged("IsAchievementGameList");
+ 		OnPropertyChanged("IsAchievementDetail");
+ 		OnPropertyChanged("AchievementsGameTitle");
+@@ -2218,6 +2235,10 @@ public sealed class GuideViewModel : ObservableObject, IDisposable
+ 			orderby game.LastPlayed ?? DateTimeOffset.MinValue descending
+ 			select game).ThenBy<GameMetadata, string>((GameMetadata game) => game.Title, StringComparer.CurrentCultureIgnoreCase).ToList();
+ 		AchievementGameItems.Clear();
++		foreach (GuideAchievementGameItem item in Xbox360AchievementGames())
++		{
++			AchievementGameItems.Add(item);
++		}
+ 		foreach (GameMetadata item in list)
+ 		{
+ 			AchievementGameItems.Add(new GuideAchievementGameItem
+@@ -2254,6 +2275,21 @@ public sealed class GuideViewModel : ObservableObject, IDisposable
+ 			return;
+ 		}
+ 		GuideAchievementGameItem game = AchievementGameItems[SelectedAchievementGameIndex];
++		if (game.SteamAppId.StartsWith(Xbox360AchievementPrefix, StringComparison.Ordinal))
++		{
++			_audioService.Play("guide-select");
++			LoadXbox360Achievements(game);
++			SelectedAchievementIndex = 0;
++			RefreshAchievementSelection();
++			NotifySelectedAchievementChanged();
++			StatusText = string.Empty;
++			OnPropertyChanged("IsAchievementGameList");
++			OnPropertyChanged("IsAchievementDetail");
++			OnPropertyChanged("AchievementsGameTitle");
++			OnPropertyChanged("AchievementsCountText");
++			OnPropertyChanged("AchievementsUnlockedText");
++			return;
++		}
+ 		try
+ 		{
+ 			StatusText = "Loading achievements...";
+@@ -2309,6 +2345,196 @@ public sealed class GuideViewModel : ObservableObject, IDisposable
+ 		return string.Empty;
+ 	}
+ 
++	// ----- Playing an Xbox 360 game in Xenia --------------------------------
++
++	private const string Xbox360AchievementPrefix = "x360:";
++
++	private const string TrophyIcon = "trophy";
++
++	private bool _isConfirmOpen;
++
++	private bool _confirmYesSelected;
++
++	private string _confirmTitle = string.Empty;
++
++	private string _confirmText = string.Empty;
++
++	private Action? _confirmAction;
++
++	private static bool IsPlayingXbox360Game => XeniaIntegration.IsXeniaGameRunning;
++
++	public bool IsConfirmOpen
++	{
++		get => _isConfirmOpen;
++		private set => SetProperty(ref _isConfirmOpen, value, "IsConfirmOpen");
++	}
++
++	public bool ConfirmYesSelected
++	{
++		get => _confirmYesSelected;
++		private set => SetProperty(ref _confirmYesSelected, value, "ConfirmYesSelected");
++	}
++
++	public string ConfirmTitle
++	{
++		get => _confirmTitle;
++		private set => SetProperty(ref _confirmTitle, value, "ConfirmTitle");
++	}
++
++	public string ConfirmText
++	{
++		get => _confirmText;
++		private set => SetProperty(ref _confirmText, value, "ConfirmText");
++	}
++
++	// A Yes/No question in the Guide; No is selected first, like the console.
++	private void ShowConfirm(string title, string text, Action onYes)
++	{
++		ConfirmTitle = title;
++		ConfirmText = text;
++		_confirmAction = onYes;
++		ConfirmYesSelected = false;
++		IsConfirmOpen = true;
++	}
++
++	public void HandleConfirmInput(Input.DashboardInputAction action)
++	{
++		switch (action)
++		{
++		case Input.DashboardInputAction.MoveUp:
++		case Input.DashboardInputAction.MoveDown:
++			ConfirmYesSelected = !ConfirmYesSelected;
++			_audioService.Play("guide-hover");
++			break;
++		case Input.DashboardInputAction.Activate:
++		{
++			Action? yes = ConfirmYesSelected ? _confirmAction : null;
++			IsConfirmOpen = false;
++			_confirmAction = null;
++			_audioService.Play(yes != null ? "guide-select" : "guide-back");
++			yes?.Invoke();
++			break;
++		}
++		case Input.DashboardInputAction.Back:
++			IsConfirmOpen = false;
++			_confirmAction = null;
++			_audioService.Play("guide-back");
++			break;
++		}
++	}
++
++	private void ConfirmQuitToXboxHome()
++	{
++		ShowConfirm("Xbox Home", "Are you sure you want to quit and go to Xbox Home? Any unsaved progress will be lost.", delegate
++		{
++			StatusText = string.Empty;
++			XeniaIntegration.QuitGame();
++			CloseGuide();
++		});
++	}
++
++	private void ConfirmSignOut()
++	{
++		ShowConfirm("Sign Out", "Are you sure you want to sign out " + Gamertag + "? Any unsaved progress in the game may be lost.", delegate
++		{
++			XeniaIntegration.SignOutOfGame();
++			CloseGuide();
++		});
++	}
++
++	private XeniaTitleStatus? RunningXbox360Title()
++	{
++		XeniaProfileStatus? status = XeniaIntegration.ReadProfileStatus();
++		string titleId = status?.CurrentTitleId ?? string.Empty;
++		return status?.Titles.FirstOrDefault((XeniaTitleStatus t) => string.Equals(t.TitleId, titleId, StringComparison.OrdinalIgnoreCase));
++	}
++
++	// Games & Apps while a game runs, as on the console.
++	private void BuildInGameItems()
++	{
++		XeniaProfileStatus? status = XeniaIntegration.ReadProfileStatus();
++		XeniaTitleStatus? title = RunningXbox360Title();
++		string count = title != null && title.Total > 0 ? title.Unlocked + " of " + title.Total : string.Empty;
++		int allUnlocked = status?.Titles.Sum((XeniaTitleStatus t) => t.Unlocked) ?? 0;
++		Items.Add(new GuideMenuItem("Achievements", TrophyIcon, OpenRunningGameAchievements, count));
++		Items.Add(new GuideMenuItem("All Achievements", TrophyIcon, OpenAchievements, allUnlocked.ToString(CultureInfo.InvariantCulture)));
++		Items.Add(new GuideMenuItem("Awards", string.Empty, DoNothing, "", isNoOp: true));
++		Items.Add(new GuideMenuItem("Recently Played", string.Empty, DoNothing, "", isNoOp: true));
++		Items.Add(new GuideMenuItem("Game Marketplace", string.Empty, delegate
++		{
++			ShowPlaceholder("Game Marketplace");
++		}));
++		Items.Add(new GuideMenuItem("My Apps", string.Empty, DoNothing, "", isNoOp: true));
++	}
++
++	private async void OpenRunningGameAchievements()
++	{
++		await OpenAchievementsOverlayFromMainGuideAsync().ConfigureAwait(continueOnCapturedContext: true);
++		string? titleId = RunningXbox360Title()?.TitleId;
++		int index = titleId == null ? -1 : AchievementGameItems.Select((GuideAchievementGameItem item, int i) => (item, i)).FirstOrDefault(((GuideAchievementGameItem item, int i) c) => c.item.SteamAppId == Xbox360AchievementPrefix + titleId).i;
++		if (titleId == null || index < 0 || index >= AchievementGameItems.Count || AchievementGameItems[index].SteamAppId != Xbox360AchievementPrefix + titleId)
++		{
++			return;
++		}
++		SelectedAchievementGameIndex = index;
++		RefreshAchievementGameSelection();
++		await LoadSelectedAchievementGameAsync().ConfigureAwait(continueOnCapturedContext: true);
++	}
++
++	// Xbox 360 games with achievements, from the profile Xenia signs in. The
++	// game being played comes first.
++	private IEnumerable<GuideAchievementGameItem> Xbox360AchievementGames()
++	{
++		XeniaProfileStatus? status = XeniaIntegration.ReadProfileStatus();
++		if (status == null || !string.Equals(status.Gamertag, Gamertag, StringComparison.OrdinalIgnoreCase))
++		{
++			yield break;
++		}
++		foreach (XeniaTitleStatus title in status.Titles.Where((XeniaTitleStatus t) => t.Total > 0).OrderByDescending((XeniaTitleStatus t) => string.Equals(t.TitleId, status.CurrentTitleId, StringComparison.OrdinalIgnoreCase)))
++		{
++			GameMetadata? game = _dashboard.Games.Select((GameCardViewModel card) => card.Game).FirstOrDefault((GameMetadata g) => XeniaIntegration.IsXeniaGame(g) && (g.Id ?? string.Empty).Contains("-" + title.TitleId + "-", StringComparison.OrdinalIgnoreCase));
++			yield return new GuideAchievementGameItem
++			{
++				Title = string.IsNullOrWhiteSpace(title.Name) ? (game?.Title ?? title.TitleId) : title.Name,
++				SteamAppId = Xbox360AchievementPrefix + title.TitleId,
++				CoverArtPath = game?.CoverArtPath ?? string.Empty,
++				UnlockedCount = title.Unlocked,
++				TotalCount = title.Total,
++				StatusText = "Xbox 360"
++			};
++		}
++	}
++
++	private void LoadXbox360Achievements(GuideAchievementGameItem game)
++	{
++		string titleId = game.SteamAppId.Substring(Xbox360AchievementPrefix.Length);
++		XeniaTitleStatus? title = XeniaIntegration.ReadProfileStatus()?.Titles.FirstOrDefault((XeniaTitleStatus t) => string.Equals(t.TitleId, titleId, StringComparison.OrdinalIgnoreCase));
++		AchievementItems.Clear();
++		if (title == null)
++		{
++			return;
++		}
++		// Unlocked first, newest first; then the rest in the game's order.
++		foreach (XeniaAchievementStatus achievement in title.List.OrderByDescending((XeniaAchievementStatus a) => a.Unlocked).ThenByDescending((XeniaAchievementStatus a) => a.UnlockTime))
++		{
++			string description = achievement.Unlocked ? achievement.Description : (achievement.Secret ? "Continue playing to unlock this secret achievement." : achievement.LockedDescription);
++			string unlocked = achievement.Unlocked && achievement.UnlockTime > 0 ? " - Unlocked " + DateTimeOffset.FromUnixTimeSeconds(achievement.UnlockTime).LocalDateTime.ToString("d", CultureInfo.CurrentCulture) : string.Empty;
++			AchievementItems.Add(new GuideAchievementItem
++			{
++				Title = achievement.Secret ? "Secret Achievement" : achievement.Name,
++				ApiName = achievement.Id.ToString(CultureInfo.InvariantCulture),
++				Description = description,
++				Achieved = achievement.Unlocked,
++				StatusText = achievement.Gamerscore + "G" + unlocked,
++				UnlockTimeUnix = achievement.UnlockTime,
++				IconPath = achievement.Unlocked ? achievement.Icon : string.Empty
++			});
++		}
++		game.UnlockedCount = title.Unlocked;
++		game.TotalCount = title.Total;
++		game.StatusText = game.CountText;
++	}
++
+ 	private GameMetadata? GetAchievementGame()
+ 	{
+ 		GameMetadata runningLaunchedGame = _dashboard.RunningLaunchedGame;
+@@ -2678,6 +2904,11 @@ public sealed class GuideViewModel : ObservableObject, IDisposable
+ 
+ 	private void OpenXboxHome()
+ 	{
++		if (IsPlayingXbox360Game)
++		{
++			ConfirmQuitToXboxHome();
++			return;
++		}
+ 		PrepareGuideReturnToDashboard();
+ 		CloseGuide();
+ 		RestoreMainWindow();
+@@ -2685,6 +2916,12 @@ public sealed class GuideViewModel : ObservableObject, IDisposable
+ 
+ 	private void OpenTray()
+ 	{
++		if (IsPlayingXbox360Game)
++		{
++			// One game at a time: Xbox Home quits this one first.
++			ConfirmQuitToXboxHome();
++			return;
++		}
+ 		if (_dashboard.TrayGame == null)
+ 		{
+ 			StatusText = "Open Tray is empty";
+diff --git a/XboxMetroLauncher/XboxMetroLauncher.Views/GuideWindow.cs b/XboxMetroLauncher/XboxMetroLauncher.Views/GuideWindow.cs
+index 3ab3a0f..e0a2684 100644
+--- a/XboxMetroLauncher/XboxMetroLauncher.Views/GuideWindow.cs
++++ b/XboxMetroLauncher/XboxMetroLauncher.Views/GuideWindow.cs
+@@ -123,13 +123,34 @@ public partial class GuideWindow : Window, IGuideWindow
+ 	public GuideWindow(GuideViewModel viewModel)
+ 	{
+ 		InitializeComponent();
+-		ConfigureGuideHeaderLayout();
+ 		ApplyGuideBladeScale();
+ 		_viewModel = viewModel;
+ 		base.DataContext = viewModel;
+ 		_viewModel.PropertyChanged += ViewModel_OnPropertyChanged;
+ 	}
+ 
++	// Renders the Guide once, invisibly and off screen, so the first real
++	// open (for example over a game) appears without a delay.
++	public void Prewarm()
++	{
++		if (base.IsVisible || _isOpening || _isClosing)
++		{
++			return;
++		}
++		bool showActivated = base.ShowActivated;
++		base.ShowActivated = false;
++		base.WindowState = WindowState.Normal;
++		base.Left = -32000.0;
++		base.Top = -32000.0;
++		base.Opacity = 0.0;
++		Show();
++		UpdateLayout();
++		Hide();
++		base.Left = 0.0;
++		base.Top = 0.0;
++		base.ShowActivated = showActivated;
++	}
++
+ 	public bool Open(bool resetToHome = true)
+ 	{
+ 		if (_isOpening || _isClosing)
+@@ -214,6 +235,7 @@ public partial class GuideWindow : Window, IGuideWindow
+ 		{
+ 			_viewModel.PlaySound("guide-close");
+ 		}
++		Services.XeniaIntegration.AllowGameToTakeFocus();
+ 		_isClosing = true;
+ 		_viewModel.Stop();
+ 		DoubleAnimation doubleAnimation = new DoubleAnimation(0.0, TimeSpan.FromMilliseconds(165.0))
+@@ -226,6 +248,10 @@ public partial class GuideWindow : Window, IGuideWindow
+ 		doubleAnimation.Completed += delegate
+ 		{
+ 			ReleaseInputCapture();
++			if (Services.XeniaIntegration.IsXeniaGameRunning)
++			{
++				Services.XeniaIntegration.FocusGame();
++			}
+ 			Hide();
+ 			base.Opacity = 1.0;
+ 			GuideContentOffset.Y = GuideOpenStartOffsetY;
+@@ -257,6 +283,11 @@ public partial class GuideWindow : Window, IGuideWindow
+ 
+ 	public bool HandleInput(DashboardInputAction action)
+ 	{
++		if (_viewModel.IsConfirmOpen && action != DashboardInputAction.Guide)
++		{
++			_viewModel.HandleConfirmInput(action);
++			return true;
++		}
+ 		if (_viewModel.IsGuideMusicPickerScreen)
+ 		{
+ 			switch (action)
+@@ -502,6 +533,13 @@ public partial class GuideWindow : Window, IGuideWindow
+ 		//IL_03af: Invalid comparison between Unknown and I4
+ 		//IL_03c6: Unknown result type (might be due to invalid IL or missing references)
+ 		//IL_03cd: Invalid comparison between Unknown and I4
++		// The PC keyboard answers the Yes/No box too.
++		if (_viewModel.IsConfirmOpen && DashboardInputRouter.TryMapKey(e, out DashboardInputAction confirmAction))
++		{
++			e.Handled = true;
++			HandleInput(confirmAction);
++			return;
++		}
+ 		if (_viewModel.IsFriendSearchScreen)
+ 		{
+ 			if ((int)e.Key == 2)
+@@ -935,29 +973,6 @@ public partial class GuideWindow : Window, IGuideWindow
+ 		});
+ 	}
+ 
+-	private void ConfigureGuideHeaderLayout()
+-	{
+-		foreach (StackPanel item in FindVisualChildren<StackPanel>((DependencyObject)(object)GuideContent))
+-		{
+-			if (Math.Abs(Canvas.GetLeft(item) - 802.0) < 0.1 && Math.Abs(Canvas.GetTop(item) - 153.0) < 0.1)
+-			{
+-				item.Visibility = Visibility.Collapsed;
+-				break;
+-			}
+-		}
+-		foreach (TextBlock item2 in FindVisualChildren<TextBlock>((DependencyObject)(object)GuideContent))
+-		{
+-			if (Math.Abs(Canvas.GetLeft(item2) - 777.0) < 0.1 && Math.Abs(Canvas.GetTop(item2) - 179.0) < 0.1)
+-			{
+-				Canvas.SetLeft(item2, 790.0);
+-				Canvas.SetTop(item2, 166.0);
+-				item2.Width = 150.0;
+-				item2.TextAlignment = TextAlignment.Left;
+-				break;
+-			}
+-		}
+-	}
+-
+ 	private void PrepareGuideOpeningReveal()
+ 	{
+ 		ResetGuideOpeningReveal();
+@@ -1054,7 +1069,7 @@ public partial class GuideWindow : Window, IGuideWindow
+ 		bool flag = false;
+ 		try
+ 		{
+-			if (num2 != 0 && num2 != currentThreadId)
++			if (num2 != 0 && num2 != currentThreadId && !Services.XeniaIntegration.IsXeniaWindow(foregroundWindow))
+ 			{
+ 				flag = AttachThreadInput(currentThreadId, num2, fAttach: true);
+ 			}
 diff --git a/XboxMetroLauncher/XboxMetroLauncher.Views/X360SetupScreens.cs b/XboxMetroLauncher/XboxMetroLauncher.Views/X360SetupScreens.cs
 new file mode 100644
 index 0000000..ccb1a7b
@@ -5078,6 +6374,124 @@ index 0000000..9f8e06e
 +		return DateTime.Now.ToString("h:mm  tt", System.Globalization.CultureInfo.InvariantCulture);
 +	}
 +}
+diff --git a/views/GuideWindow.xaml b/views/GuideWindow.xaml
+index bbb37d5..a3fe570 100644
+--- a/views/GuideWindow.xaml
++++ b/views/GuideWindow.xaml
+@@ -450,15 +450,8 @@
+       <Canvas Width="1280" Height="720">
+         <TextBlock Text="Xbox Guide" Canvas.Left="354" Canvas.Top="165" Foreground="#FFE8EAEB" FontFamily="Segoe UI" FontSize="23" FontWeight="Light" />
+         <Image Canvas.Left="607" Canvas.Top="146" Width="48" Height="48" Stretch="UniformToFill" Source="{Binding GamerPicturePath, Converter={StaticResource StringToImageSourceConverter}}" />
+-        <StackPanel Canvas.Left="802" Canvas.Top="153" Orientation="Horizontal">
+-          <Grid Width="32" Height="18" Margin="0,2,18,0">
+-            <Border Width="25" Height="12" HorizontalAlignment="Left" VerticalAlignment="Center" BorderBrush="#FFE1E5E6" BorderThickness="2" />
+-            <Border Width="4" Height="8" HorizontalAlignment="Right" Margin="0,0,2,0" Background="#FFE1E5E6" VerticalAlignment="Center" />
+-            <Rectangle Width="16" Height="6" Fill="#FFE1E5E6" HorizontalAlignment="Left" Margin="4,0,0,0" />
+-          </Grid>
+-          <Ellipse Width="22" Height="22" Stroke="{DynamicResource MetroGreenBrush}" StrokeThickness="2" Margin="0,0,14,0" />
+-        </StackPanel>
+-        <TextBlock Canvas.Left="777" Canvas.Top="179" Width="126" TextAlignment="Center" Foreground="#FFE8EAEB" FontSize="21" FontWeight="SemiBold" Text="{Binding ClockText}" />
++        <controls:GuideStatusIndicator Canvas.Left="906" Canvas.Top="148" />
++        <TextBlock Canvas.Left="826" Canvas.Top="168" Width="180" TextAlignment="Right" Foreground="#FFE8EAEB" FontSize="21" FontWeight="SemiBold" Text="{Binding ClockText}" />
+         <Grid Canvas.Left="314" Canvas.Top="204" Width="694" Visibility="{Binding IsGuideBladeScreen, Converter={StaticResource BooleanToVisibilityConverter}}">
+           <Grid.RowDefinitions>
+             <RowDefinition Height="315" />
+@@ -520,16 +513,26 @@
+                   </ItemsControl.ItemContainerStyle>
+                   <ItemsControl.ItemTemplate>
+                     <DataTemplate>
+-                      <Grid Margin="18,0,13,0">
++                      <Grid Name="RowContent" Margin="18,0,13,0">
+                         <Grid.ColumnDefinitions>
+                           <ColumnDefinition Width="*" />
+-                          <ColumnDefinition Width="42" />
++                          <ColumnDefinition Width="Auto" MinWidth="42" />
+                           <ColumnDefinition Width="32" />
+                         </Grid.ColumnDefinitions>
+                         <TextBlock FontFamily="Segoe UI" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center" Text="{Binding Title}" Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" />
+-                        <TextBlock Grid.Column="1" FontSize="21" HorizontalAlignment="Right" VerticalAlignment="Center" Text="{Binding Count}" Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" />
+-                        <TextBlock Grid.Column="2" FontFamily="Segoe MDL2 Assets" FontSize="21" HorizontalAlignment="Right" VerticalAlignment="Center" Text="{Binding Icon}" Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" />
++                        <TextBlock Grid.Column="1" FontSize="21" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="8,0,0,0" Text="{Binding Count}" Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" />
++                        <TextBlock Name="IconGlyph" Grid.Column="2" FontFamily="Segoe MDL2 Assets" FontSize="21" HorizontalAlignment="Right" VerticalAlignment="Center" Text="{Binding Icon}" Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" />
++                        <Path Name="TrophyGlyph" Grid.Column="2" Width="17" Height="21" Margin="0,0,2,0" Stretch="Uniform" HorizontalAlignment="Right" VerticalAlignment="Center" Visibility="Collapsed" Data="M0,0 H16 V4 C16,9 12.5,11 8,11 C3.5,11 0,9 0,4 Z M6.8,11 H9.2 V16 H6.8 Z M3,16 H13 V19 H3 Z" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" />
+                       </Grid>
++                      <DataTemplate.Triggers>
++                        <DataTrigger Binding="{Binding Icon}" Value="trophy">
++                          <Setter TargetName="IconGlyph" Property="Visibility" Value="Collapsed" />
++                          <Setter TargetName="TrophyGlyph" Property="Visibility" Value="Visible" />
++                        </DataTrigger>
++                        <DataTrigger Binding="{Binding IsNoOp}" Value="True">
++                          <Setter TargetName="RowContent" Property="Opacity" Value="0.45" />
++                        </DataTrigger>
++                      </DataTemplate.Triggers>
+                     </DataTemplate>
+                   </ItemsControl.ItemTemplate>
+                 </ListBox>
+@@ -1657,6 +1660,64 @@
+             <TextBlock Margin="24,0,24,0" VerticalAlignment="Center" HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" Foreground="#FF333638" FontSize="20" Text="{Binding SocialMessageText}" />
+           </Border>
+         </Grid>
++        <Grid Canvas.Left="404" Canvas.Top="226" Width="472" Visibility="{Binding IsConfirmOpen, Converter={StaticResource BooleanToVisibilityConverter}}">
++          <StackPanel>
++            <Border Background="#FF15191B" BorderBrush="#FF5B6368" BorderThickness="1,1,1,0" Height="40">
++              <TextBlock Margin="16,0,0,0" VerticalAlignment="Center" Foreground="#FFFFFFFF" FontFamily="Segoe UI" FontSize="18" Text="{Binding ConfirmTitle}" />
++            </Border>
++            <Border Background="#FFE8ECEE" BorderBrush="#FF98A2A8" BorderThickness="1,1,1,1">
++              <TextBlock Margin="20,18,20,18" TextWrapping="Wrap" Foreground="#FF333638" FontFamily="Segoe UI" FontSize="19" Text="{Binding ConfirmText}" />
++            </Border>
++              <Border Height="42" BorderBrush="#FFC0C8CA" BorderThickness="1,0,1,1">
++                <Border.Style>
++                  <Style TargetType="{x:Type Border}">
++                    <Setter Property="Background" Value="#FFE5EAEB" />
++                    <Style.Triggers>
++                      <DataTrigger Binding="{Binding ConfirmYesSelected}" Value="True">
++                        <Setter Property="Background" Value="{DynamicResource MetroGreenBrush}" />
++                      </DataTrigger>
++                    </Style.Triggers>
++                  </Style>
++                </Border.Style>
++                <TextBlock Margin="18,0,0,0" VerticalAlignment="Center" FontFamily="Segoe UI" FontSize="20" FontWeight="SemiBold" Text="Yes">
++                  <TextBlock.Style>
++                    <Style TargetType="{x:Type TextBlock}">
++                      <Setter Property="Foreground" Value="#FF333638" />
++                      <Style.Triggers>
++                        <DataTrigger Binding="{Binding ConfirmYesSelected}" Value="True">
++                          <Setter Property="Foreground" Value="#FFFFFFFF" />
++                        </DataTrigger>
++                      </Style.Triggers>
++                    </Style>
++                  </TextBlock.Style>
++                </TextBlock>
++              </Border>
++              <Border Height="42" BorderBrush="#FFC0C8CA" BorderThickness="1,0,1,1">
++                <Border.Style>
++                  <Style TargetType="{x:Type Border}">
++                    <Setter Property="Background" Value="#FFE5EAEB" />
++                    <Style.Triggers>
++                      <DataTrigger Binding="{Binding ConfirmYesSelected}" Value="False">
++                        <Setter Property="Background" Value="{DynamicResource MetroGreenBrush}" />
++                      </DataTrigger>
++                    </Style.Triggers>
++                  </Style>
++                </Border.Style>
++                <TextBlock Margin="18,0,0,0" VerticalAlignment="Center" FontFamily="Segoe UI" FontSize="20" FontWeight="SemiBold" Text="No">
++                  <TextBlock.Style>
++                    <Style TargetType="{x:Type TextBlock}">
++                      <Setter Property="Foreground" Value="#FF333638" />
++                      <Style.Triggers>
++                        <DataTrigger Binding="{Binding ConfirmYesSelected}" Value="False">
++                          <Setter Property="Foreground" Value="#FFFFFFFF" />
++                        </DataTrigger>
++                      </Style.Triggers>
++                    </Style>
++                  </TextBlock.Style>
++                </TextBlock>
++              </Border>
++          </StackPanel>
++        </Grid>
+         <TextBlock Canvas.Left="477" Canvas.Top="614" Foreground="#CCFFFFFF" FontSize="15" Text="{Binding StatusText}" Visibility="{Binding ShowStatusText, Converter={StaticResource BooleanToVisibilityConverter}}" />
+       </Canvas>
+     </Viewbox>
 diff --git a/views/tabs/AppsTabView.xaml b/views/tabs/AppsTabView.xaml
 index 220c606..a093c3a 100644
 --- a/views/tabs/AppsTabView.xaml
@@ -5100,7 +6514,7 @@ index 220c606..a093c3a 100644
            </Button>
            <Button Canvas.Left="458" Canvas.Top="0" Width="158" Height="148" Style="{StaticResource X360TileButtonStyle}" Command="{Binding Shell.LaunchDashboardTileCommand}" CommandParameter="apps.netflix">
 diff --git a/views/tabs/GamesTabView.xaml b/views/tabs/GamesTabView.xaml
-index 23e582d..f47edb9 100644
+index 23e582d..e45f2d1 100644
 --- a/views/tabs/GamesTabView.xaml
 +++ b/views/tabs/GamesTabView.xaml
 @@ -1,4 +1,4 @@
@@ -5109,6 +6523,15 @@ index 23e582d..f47edb9 100644
    <Grid Background="#00FFFFFF" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
      <Canvas Name="DashboardCanvas" Width="1280" Height="502" ClipToBounds="False" HorizontalAlignment="Left" VerticalAlignment="Top">
        <StackPanel Canvas.Left="-40" Canvas.Top="76" Opacity="0.48" Visibility="Collapsed">
+@@ -20,7 +20,7 @@
+           <TextBlock Foreground="#FFFFFFFF" FontSize="22" Margin="15,0,0,12" VerticalAlignment="Bottom" TextWrapping="Wrap" Text="{Binding Shell.Settings, Converter={StaticResource DashboardTileTitleConverter}, ConverterParameter=games.marketplace|Game Marketplace}" />
+         </Grid>
+       </Button>
+-      <Button Canvas.Left="415" Canvas.Top="74" Width="400" Height="303" Style="{StaticResource X360TileButtonStyle}" Command="{Binding Shell.LaunchDashboardTileCommand}" CommandParameter="games.forza">
++      <Button Canvas.Left="415" Canvas.Top="74" Width="400" Height="303" Style="{StaticResource X360TileButtonStyle}" Command="{Binding Shell.LaunchSpotlightGameCommand}" CommandParameter="{Binding CurrentKey, ElementName=GamesSpotlight}">
+         <Grid ClipToBounds="True">
+           <Panel.Background>
+             <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
 @@ -29,11 +29,7 @@
                <GradientStop Color="#FF17201C" Offset="1" />
              </LinearGradientBrush>
@@ -5118,12 +6541,34 @@ index 23e582d..f47edb9 100644
 -          <Rectangle Height="78" VerticalAlignment="Bottom" Fill="#8F000000" />
 -          <TextBlock Foreground="#FFFFFFFF" FontSize="24" Margin="10,0,0,42" VerticalAlignment="Bottom" Text="{Binding Shell.Settings, Converter={StaticResource DashboardTileTitleConverter}, ConverterParameter=games.forza|Forza Horizon}" />
 -          <TextBlock Foreground="#DFFFFFFF" FontSize="24" Margin="10,0,0,12" VerticalAlignment="Bottom" Text="{Binding Shell.Settings, Converter={StaticResource DashboardTileSecondaryTitleConverter}, ConverterParameter=games.forza|December IGN Pack}" />
-+          <controls:RotatingTile CaptionSize="24" IncludeXbox360Games="True" PrimarySource="{Binding Shell.Settings, Converter={StaticResource DashboardTileImageSourceConverter}, ConverterParameter=games.forza|Assets/Tiles/forzahorizongames.jpg|512}" PrimaryTitle="{Binding Shell.Settings, Converter={StaticResource DashboardTileTitleConverter}, ConverterParameter=games.forza|Forza Horizon}" PrimarySubtitle="{Binding Shell.Settings, Converter={StaticResource DashboardTileSecondaryTitleConverter}, ConverterParameter=games.forza|December IGN Pack}" Items="Assets/Tiles/minecraftgames.jpg|Minecraft|Xbox 360 Edition;Assets/Tiles/blackops2games.jpg|Call of Duty: Black Ops II" />
++          <controls:RotatingTile x:Name="GamesSpotlight" CaptionSize="24" IncludeXbox360Games="True" Spotlight="game" SpotlightOffset="20" />
          </Grid>
        </Button>
        <Button Canvas.Left="817" Canvas.Top="74" Width="200" Height="151" Style="{StaticResource X360TileButtonStyle}" Command="{Binding Shell.LaunchDashboardTileCommand}" CommandParameter="games.minecraft">
+@@ -45,9 +41,7 @@
+               <GradientStop Color="#FF131814" Offset="1" />
+             </LinearGradientBrush>
+           </Panel.Background>
+-          <Image Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center" Source="{Binding Shell.Settings, Converter={StaticResource DashboardTileImageSourceConverter}, ConverterParameter=games.minecraft|Assets/Tiles/minecraftgames.jpg|320}" />
+-          <Rectangle Fill="#33000000" />
+-          <TextBlock Foreground="#FFFFFFFF" FontSize="20" Margin="10,0,0,14" VerticalAlignment="Bottom" Text="{Binding Shell.Settings, Converter={StaticResource DashboardTileTitleConverter}, ConverterParameter=games.minecraft|Minecraft}" />
++          <controls:RotatingTile CaptionSize="17" Interval="8" Spotlight="game" SpotlightOffset="0" />
+         </Grid>
+       </Button>
+       <Button Canvas.Left="817" Canvas.Top="227" Width="200" Height="150" Style="{StaticResource X360TileButtonStyle}" Command="{Binding Shell.LaunchDashboardTileCommand}" CommandParameter="games.blackops">
+@@ -59,9 +53,7 @@
+               <GradientStop Color="#FF111111" Offset="1" />
+             </LinearGradientBrush>
+           </Panel.Background>
+-          <Image Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center" Source="{Binding Shell.Settings, Converter={StaticResource DashboardTileImageSourceConverter}, ConverterParameter=games.blackops|Assets/Tiles/blackops2games.jpg|320}" />
+-          <Rectangle Fill="#33000000" />
+-          <TextBlock Foreground="#FFFFFFFF" FontSize="20" Margin="10,0,0,14" VerticalAlignment="Bottom" Text="{Binding Shell.Settings, Converter={StaticResource DashboardTileTitleConverter}, ConverterParameter=games.blackops|Black Ops II}" />
++          <controls:RotatingTile CaptionSize="17" Interval="8" Spotlight="game" SpotlightOffset="13" />
+         </Grid>
+       </Button>
+       <TextBlock Canvas.Left="820" Canvas.Top="387" Text="ADVERTISEMENT" Foreground="#FFBFC4C2" FontSize="13" />
 diff --git a/views/tabs/HomeTabView.xaml b/views/tabs/HomeTabView.xaml
-index efa166a..b16230c 100644
+index efa166a..b13f222 100644
 --- a/views/tabs/HomeTabView.xaml
 +++ b/views/tabs/HomeTabView.xaml
 @@ -1,4 +1,4 @@
@@ -5148,12 +6593,52 @@ index efa166a..b16230c 100644
 -            </Rectangle>
 -            <Rectangle Height="30" VerticalAlignment="Bottom" Fill="#C9000000" />
 -            <TextBlock FontSize="17" Foreground="#FFFFFFFF" Margin="8,0,0,6" VerticalAlignment="Bottom" Text="{Binding Shell.Settings, Converter={StaticResource DashboardTileTitleConverter}, ConverterParameter=home.halo|Halo 4}" />
-+            <controls:RotatingTile CaptionSize="17" PrimarySource="{Binding Shell.Settings, Converter={StaticResource DashboardTileImageSourceConverter}, ConverterParameter=home.halo|Assets/Tiles/halo4home.jpg|512}" PrimaryTitle="{Binding Shell.Settings, Converter={StaticResource DashboardTileTitleConverter}, ConverterParameter=home.halo|Halo 4}" Items="Assets/Tiles/dexterhome.jpg|Dexter;Assets/Tiles/maroon5home.jpg|Maroon 5;Assets/Tiles/dancecentralhome.jpg|Dance Central 3;Assets/Tiles/youtubehome.jpg|YouTube;Assets/Tiles/espn.jpg|ESPN" />
++            <controls:RotatingTile Spotlight="game,movie,tv,music" CaptionSize="17" PrimarySource="{Binding Shell.Settings, Converter={StaticResource DashboardTileImageSourceConverter}, ConverterParameter=home.halo|Assets/Tiles/halo4home.jpg|512}" PrimaryTitle="{Binding Shell.Settings, Converter={StaticResource DashboardTileTitleConverter}, ConverterParameter=home.halo|Halo 4}" Items="Assets/Tiles/dexterhome.jpg|Dexter;Assets/Tiles/maroon5home.jpg|Maroon 5;Assets/Tiles/dancecentralhome.jpg|Dance Central 3;Assets/Tiles/youtubehome.jpg|YouTube;Assets/Tiles/espn.jpg|ESPN" />
            </Grid>
          </Button>
          <Button Canvas.Left="187" Canvas.Top="265" Width="231" Height="133" Style="{StaticResource X360TileButtonStyle}" Command="{Binding Shell.LaunchDashboardTileCommand}" CommandParameter="home.dexter">
+@@ -63,18 +52,7 @@
+                 <GradientStop Color="#FF321A16" Offset="1" />
+               </LinearGradientBrush>
+             </Panel.Background>
+-            <Image Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center" Source="{Binding Shell.Settings, Converter={StaticResource DashboardTileImageSourceConverter}, ConverterParameter=home.dexter|Assets/Tiles/dexterhome.jpg|320}" />
+-            <Rectangle>
+-              <Shape.Fill>
+-                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+-                  <GradientStop Color="#00000000" Offset="0" />
+-                  <GradientStop Color="#28000000" Offset="0.55" />
+-                  <GradientStop Color="#B0000000" Offset="1" />
+-                </LinearGradientBrush>
+-              </Shape.Fill>
+-            </Rectangle>
+-            <Rectangle Height="30" VerticalAlignment="Bottom" Fill="#C9000000" />
+-            <TextBlock FontSize="17" Foreground="#FFFFFFFF" Margin="8,0,0,6" VerticalAlignment="Bottom" Text="{Binding Shell.Settings, Converter={StaticResource DashboardTileTitleConverter}, ConverterParameter=home.dexter|Dexter}" />
++            <controls:RotatingTile CaptionSize="15" Interval="8" Spotlight="tv" SpotlightOffset="4" PrimarySource="{Binding Shell.Settings, Converter={StaticResource DashboardTileImageSourceConverter}, ConverterParameter=home.dexter|Assets/Tiles/dexterhome.jpg|320}" PrimaryTitle="{Binding Shell.Settings, Converter={StaticResource DashboardTileTitleConverter}, ConverterParameter=home.dexter|Dexter}" />
+           </Grid>
+         </Button>
+         <Button Canvas.Left="420" Canvas.Top="265" Width="233" Height="133" Style="{StaticResource X360TileButtonStyle}" Command="{Binding Shell.LaunchDashboardTileCommand}" CommandParameter="home.maroon5">
+@@ -85,18 +63,7 @@
+                 <GradientStop Color="#FF50606F" Offset="1" />
+               </LinearGradientBrush>
+             </Panel.Background>
+-            <Image Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center" Source="{Binding Shell.Settings, Converter={StaticResource DashboardTileImageSourceConverter}, ConverterParameter=home.maroon5|Assets/Tiles/maroon5home.jpg|320}" />
+-            <Rectangle>
+-              <Shape.Fill>
+-                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+-                  <GradientStop Color="#00000000" Offset="0" />
+-                  <GradientStop Color="#30000000" Offset="0.62" />
+-                  <GradientStop Color="#B0000000" Offset="1" />
+-                </LinearGradientBrush>
+-              </Shape.Fill>
+-            </Rectangle>
+-            <Rectangle Height="30" VerticalAlignment="Bottom" Fill="#C9000000" />
+-            <TextBlock FontSize="17" Foreground="#FFFFFFFF" Margin="8,0,0,6" VerticalAlignment="Bottom" Text="{Binding Shell.Settings, Converter={StaticResource DashboardTileTitleConverter}, ConverterParameter=home.maroon5|Maroon 5}" />
++            <controls:RotatingTile CaptionSize="15" Interval="8" Spotlight="music" SpotlightOffset="0" PrimarySource="{Binding Shell.Settings, Converter={StaticResource DashboardTileImageSourceConverter}, ConverterParameter=home.maroon5|Assets/Tiles/maroon5home.jpg|320}" PrimaryTitle="{Binding Shell.Settings, Converter={StaticResource DashboardTileTitleConverter}, ConverterParameter=home.maroon5|Maroon 5}" />
+           </Grid>
+         </Button>
+         <Button Canvas.Left="655" Canvas.Top="0" Width="179" Height="131" Style="{StaticResource X360TileButtonStyle}" Command="{Binding Shell.LaunchDashboardTileCommand}" CommandParameter="home.kinect">
 diff --git a/views/tabs/MediaTabView.xaml b/views/tabs/MediaTabView.xaml
-index 43e4df0..a2d26fc 100644
+index 43e4df0..122e5af 100644
 --- a/views/tabs/MediaTabView.xaml
 +++ b/views/tabs/MediaTabView.xaml
 @@ -1,4 +1,4 @@
@@ -5162,7 +6647,7 @@ index 43e4df0..a2d26fc 100644
    <Grid Background="#00FFFFFF" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
      <Canvas Name="DashboardCanvas" Width="1280" Height="502" ClipToBounds="False" HorizontalAlignment="Left" VerticalAlignment="Top">
        <Button Canvas.Left="236" Canvas.Top="76" Width="146" Height="148" Style="{StaticResource X360TileButtonStyle}" Command="{Binding Shell.LaunchDashboardTileCommand}" CommandParameter="video.apps">
-@@ -22,18 +22,7 @@
+@@ -22,25 +22,12 @@
                <GradientStop Color="#FF201712" Offset="1" />
              </LinearGradientBrush>
            </Panel.Background>
@@ -5178,10 +6663,30 @@ index 43e4df0..a2d26fc 100644
 -          </Rectangle>
 -          <Rectangle Height="46" VerticalAlignment="Bottom" Fill="#82000000" />
 -          <TextBlock Foreground="#FFFFFFFF" FontSize="19" Margin="12,0,0,12" VerticalAlignment="Bottom" Text="{Binding Shell.Settings, Converter={StaticResource DashboardTileTitleConverter}, ConverterParameter=video.feature|The Dark Knight}" />
-+          <controls:RotatingTile CaptionSize="19" PrimarySource="{Binding Shell.Settings, Converter={StaticResource DashboardTileImageSourceConverter}, ConverterParameter=video.feature|Assets/Tiles/thedarkkightvideo.jpg|512}" PrimaryTitle="{Binding Shell.Settings, Converter={StaticResource DashboardTileTitleConverter}, ConverterParameter=video.feature|The Dark Knight}" Items="Assets/Tiles/kungfupanda2video.jpg|Kung Fu Panda 2;Assets/Tiles/cloudywithachanceofmeatballsvideo.jpg|Cloudy with a Chance of Meatballs;Assets/Tiles/hbogovideo.jpg|HBO GO" />
++          <controls:RotatingTile Spotlight="movie,tv" CaptionSize="19" PrimarySource="{Binding Shell.Settings, Converter={StaticResource DashboardTileImageSourceConverter}, ConverterParameter=video.feature|Assets/Tiles/thedarkkightvideo.jpg|512}" PrimaryTitle="{Binding Shell.Settings, Converter={StaticResource DashboardTileTitleConverter}, ConverterParameter=video.feature|The Dark Knight}" Items="Assets/Tiles/kungfupanda2video.jpg|Kung Fu Panda 2;Assets/Tiles/cloudywithachanceofmeatballsvideo.jpg|Cloudy with a Chance of Meatballs;Assets/Tiles/hbogovideo.jpg|HBO GO" />
          </Grid>
        </Button>
        <Button Canvas.Left="694" Canvas.Top="73" Width="148" Height="150" Style="{StaticResource X360TileButtonStyle}" Command="{Binding Shell.LaunchDashboardTileCommand}" CommandParameter="video.cloudy">
+         <Grid Background="#FF33434A" ClipToBounds="True">
+-          <Image Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center" Source="{Binding Shell.Settings, Converter={StaticResource DashboardTileImageSourceConverter}, ConverterParameter=video.cloudy|Assets/Tiles/cloudywithachanceofmeatballsvideo.jpg|256}" />
+-          <Rectangle Fill="#55000000" />
+-          <TextBlock Foreground="#FFFFFFFF" FontSize="16" Margin="10,0,8,12" VerticalAlignment="Bottom" TextWrapping="Wrap" Text="{Binding Shell.Settings, Converter={StaticResource DashboardTileTitleConverter}, ConverterParameter=video.cloudy|Cloudy with a Chance of Meatballs}" />
++          <controls:RotatingTile CaptionSize="15" Interval="8" Spotlight="movie" SpotlightOffset="12" PrimarySource="{Binding Shell.Settings, Converter={StaticResource DashboardTileImageSourceConverter}, ConverterParameter=video.cloudy|Assets/Tiles/cloudywithachanceofmeatballsvideo.jpg|256}" PrimaryTitle="{Binding Shell.Settings, Converter={StaticResource DashboardTileTitleConverter}, ConverterParameter=video.cloudy|Cloudy with a Chance of Meatballs}" />
+         </Grid>
+       </Button>
+       <Button Canvas.Left="844" Canvas.Top="73" Width="198" Height="150" Style="{StaticResource X360TileButtonStyle}" Command="{Binding Shell.LaunchDashboardTileCommand}" CommandParameter="video.recent">
+@@ -51,10 +38,7 @@
+       </Button>
+       <Button Canvas.Left="694" Canvas.Top="225" Width="148" Height="149" Style="{StaticResource X360TileButtonStyle}" Command="{Binding Shell.LaunchDashboardTileCommand}" CommandParameter="video.kungfu">
+         <Grid Background="#FFE9C330" ClipToBounds="True">
+-          <Image Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center" Source="{Binding Shell.Settings, Converter={StaticResource DashboardTileImageSourceConverter}, ConverterParameter=video.kungfu|Assets/Tiles/kungfupanda2video.jpg|256}" />
+-          <Rectangle Fill="#44000000" />
+-          <TextBlock Text="HD" Foreground="#AAFFFFFF" FontSize="28" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" />
+-          <TextBlock Foreground="#FFFFFFFF" FontSize="21" Margin="10,0,0,12" VerticalAlignment="Bottom" TextWrapping="Wrap" Text="{Binding Shell.Settings, Converter={StaticResource DashboardTileTitleConverter}, ConverterParameter=video.kungfu|Kung Fu Panda 2}" />
++          <controls:RotatingTile CaptionSize="15" Interval="8" Spotlight="tv" SpotlightOffset="9" PrimarySource="{Binding Shell.Settings, Converter={StaticResource DashboardTileImageSourceConverter}, ConverterParameter=video.kungfu|Assets/Tiles/kungfupanda2video.jpg|256}" PrimaryTitle="{Binding Shell.Settings, Converter={StaticResource DashboardTileTitleConverter}, ConverterParameter=video.kungfu|Kung Fu Panda 2}" />
+         </Grid>
+       </Button>
+       <Button Canvas.Left="844" Canvas.Top="225" Width="198" Height="149" Style="{StaticResource X360TileButtonStyle}" Command="{Binding Shell.LaunchDashboardTileCommand}" CommandParameter="video.hbogo">
 diff --git a/views/tabs/MusicTabView.xaml b/views/tabs/MusicTabView.xaml
 index 0223360..db2ec3a 100644
 --- a/views/tabs/MusicTabView.xaml
